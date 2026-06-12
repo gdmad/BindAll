@@ -1,0 +1,10 @@
+# Xcode / build
+build/
+DerivedData/
+.release/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Swift
+.build/
