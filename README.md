@@ -1,10 +1,31 @@
-# BindAll
+<p align="center">
+  <img src="assets/logo.png" width="120" alt="BindAll logo">
+</p>
 
-A minimal macOS menu-bar utility that acts on the currently selected text with global shortcuts —
-fix grammar, run custom prompts, translate, and OCR-translate from the screen. On-device by default
-(Apple Intelligence + Apple Translation), with optional cloud providers.
+<h1 align="center">BindAll</h1>
+
+<p align="center">
+  A minimal macOS menu-bar utility that acts on the currently selected text with global shortcuts —
+  fix grammar, run custom prompts, translate, and OCR-translate from the screen.<br>
+  On-device by default (Apple Intelligence + Apple Translation), with optional cloud providers.
+</p>
 
 No Dock icon: BindAll lives in the menu bar (`LSUIElement`).
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><img src="assets/screenshots/general.png" width="250" alt="General"><br><sub><b>General</b></sub></td>
+    <td align="center"><img src="assets/screenshots/actions.png" width="250" alt="Actions"><br><sub><b>Actions</b></sub></td>
+    <td align="center"><img src="assets/screenshots/providers.png" width="250" alt="Providers"><br><sub><b>Providers</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/screenshots/translation.png" width="250" alt="Translation"><br><sub><b>Translation</b></sub></td>
+    <td align="center"><img src="assets/screenshots/shortcuts.png" width="250" alt="Shortcuts"><br><sub><b>Shortcuts</b></sub></td>
+    <td></td>
+  </tr>
+</table>
 
 ## Features
 
