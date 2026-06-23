@@ -4,12 +4,18 @@ import AppKit
 struct WatchedHotkey: Hashable {
     var keyCode: UInt16
     var modifiers: HotkeyModifiers
-    var windowMilliseconds: Int
+    /// Highest press count any action expects for this key+modifiers. Once reached, the burst fires
+    /// immediately instead of waiting out the window (no point waiting for a press that cannot match).
+    var maxRepeat: Int = 1
 }
 
 /// Passive CGEventTap that detects repeated key presses (e.g. Cmd+C pressed N times in a row)
 /// without consuming the events, so normal copy still works.
 final class HotkeyMonitor {
+    /// How long a burst waits for another press before firing (when more presses are still possible).
+    /// A single app-wide constant; it is not a user-facing or stored setting.
+    static let burstWindow: TimeInterval = 0.35
+
     /// Called on the main thread when a burst of identical presses ends.
     var onBurst: ((UInt16, HotkeyModifiers, Int) -> Void)?
 
@@ -92,7 +98,8 @@ final class HotkeyMonitor {
         }
 
         let key = "\(keyCode)|\(mods.command)\(mods.option)\(mods.control)\(mods.shift)"
-        let window = Double(match.windowMilliseconds) / 1000.0
+        let window = Self.burstWindow
+        let maxRepeat = match.maxRepeat
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -100,6 +107,13 @@ final class HotkeyMonitor {
             state.workItem?.cancel()
             state.count += 1
             let count = state.count
+
+            // Highest expected press count reached: fire now instead of waiting out the window.
+            if count >= maxRepeat {
+                self.bursts[key] = nil
+                self.onBurst?(keyCode, mods, count)
+                return
+            }
 
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }

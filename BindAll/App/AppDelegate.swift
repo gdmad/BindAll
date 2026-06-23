@@ -10,6 +10,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var pulseTimer: Timer?
+    private lazy var historyPopover: NSPopover = {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        return popover
+    }()
     private var cancellables = Set<AnyCancellable>()
 
     /// SF Symbol shown when idle.
@@ -19,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
         coordinator.start()
+        // Warm up the on-device model so the first action is not paying the cold-start cost.
+        AppleFoundationEngine.prewarm()
         // Ask for Accessibility up front (needed for the global hotkeys); the system shows its prompt
         // only if not yet granted. No window is opened automatically.
         AccessibilityPermission.requestIfNeeded()
@@ -100,60 +107,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menu.addItem(grant)
         }
 
-        if appState.settings.historyEnabled {
-            let history = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
-            history.submenu = buildHistorySubmenu()
-            menu.addItem(history)
+        menu.addItem(.separator())
+
+        // The same actions the global shortcuts trigger, plus Settings/Quit, all drawn with their
+        // shortcut in one shared right-aligned column. Settings/Quit use custom titles (not native
+        // key equivalents) so they share the column and the menu has no stray space on the right.
+        let s = appState.settings
+        var actions: [(title: String, shortcut: String, action: Selector)] = [
+            ("Fix selection", HotkeyFormatter.string(s.defaultActionHotkey), #selector(menuFix)),
+            ("Translate selection", HotkeyFormatter.string(s.translateHotkey), #selector(menuTranslate)),
+            ("Translate from screen", HotkeyFormatter.string(s.screenTranslateHotkey), #selector(menuScreenTranslate)),
+            ("Quick Translate", HotkeyFormatter.string(s.quickTranslateHotkey), #selector(menuQuickTranslate)),
+        ]
+        if s.correctEnabled {
+            actions.append(("Correct (LanguageTool)", HotkeyFormatter.string(s.correctHotkey), #selector(menuCorrect)))
+        }
+
+        // Column = widest "title + gap + shortcut" across every shortcut-bearing item.
+        let font = NSFont.menuFont(ofSize: 0)
+        let gap: CGFloat = 18
+        let widths = (actions.map { ($0.title, $0.shortcut) } + [("Settings…", "⌘,"), ("Quit BindAll", "⌘Q")])
+            .map { (title, shortcut) in
+                (title as NSString).size(withAttributes: [.font: font]).width + gap
+                    + (shortcut as NSString).size(withAttributes: [.font: font]).width
+            }
+        let column = ceil(widths.max() ?? 220)
+
+        for a in actions {
+            menu.addItem(actionMenuItem(a.title, shortcut: a.shortcut, action: a.action, tab: column))
         }
 
         menu.addItem(.separator())
 
-        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
-        settings.target = self
-        menu.addItem(settings)
-
-        let quit = NSMenuItem(title: "Quit BindAll", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-    }
-
-    /// Builds the History submenu: up to 20 recent results, click = copy output, plus Clear.
-    private func buildHistorySubmenu() -> NSMenu {
-        let submenu = NSMenu()
-        let entries = HistoryStore.shared.entries.prefix(20)
-
-        if entries.isEmpty {
-            let empty = NSMenuItem(title: "No history yet", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            submenu.addItem(empty)
-        } else {
-            for entry in entries {
-                let preview = entry.output
-                    .replacingOccurrences(of: "\n", with: " ")
-                    .trimmingCharacters(in: .whitespaces)
-                let title = "\(preview.prefix(50))\(preview.count > 50 ? "…" : "")"
-                let item = NSMenuItem(title: title, action: #selector(copyHistoryEntry(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = entry.output
-                item.toolTip = "\(entry.kind.label) — click to copy the result.\n\nInput: \(entry.input.prefix(300))"
-                submenu.addItem(item)
-            }
-            submenu.addItem(.separator())
-            let clear = NSMenuItem(title: "Clear History", action: #selector(clearHistory), keyEquivalent: "")
-            clear.target = self
-            submenu.addItem(clear)
+        if appState.settings.historyEnabled {
+            // A plain item (not a submenu) so the menu reserves no submenu-arrow column. It opens a
+            // floating panel instead.
+            let history = NSMenuItem(title: "History…", action: #selector(showHistory), keyEquivalent: "")
+            history.target = self
+            menu.addItem(history)
         }
-        return submenu
+
+        menu.addItem(actionMenuItem("Settings…", shortcut: "⌘,", action: #selector(showSettings), tab: column))
+        menu.addItem(actionMenuItem("Quit BindAll", shortcut: "⌘Q", action: #selector(quit), tab: column))
     }
 
-    @objc private func copyHistoryEntry(_ sender: NSMenuItem) {
-        guard let output = sender.representedObject as? String else { return }
-        TextInjector.copyToPasteboard(output)
-    }
-
-    @objc private func clearHistory() {
-        HistoryStore.shared.clear()
-        rebuildMenu()
+    /// Shows the History panel as a popover anchored to the status item.
+    @objc private func showHistory() {
+        guard let button = statusItem?.button else { return }
+        let view = HistoryPanelView(
+            entries: HistoryStore.shared.entries,
+            onCopy: { [weak self] text in
+                TextInjector.copyToPasteboard(text)
+                self?.historyPopover.performClose(nil)
+            },
+            onClear: { [weak self] in
+                HistoryStore.shared.clear()
+                self?.historyPopover.performClose(nil)
+            }
+        )
+        historyPopover.contentViewController = NSHostingController(rootView: view)
+        // Activate so the popover is interactive (we are an accessory app).
+        NSApp.activate(ignoringOtherApps: true)
+        historyPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
     // MARK: - Actions
@@ -171,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func showSettings() {
         if settingsWindow == nil {
             let hosting = NSHostingController(rootView: SettingsView().environmentObject(appState))
-            let window = NSWindow(contentViewController: hosting)
+            let window = EscClosableWindow(contentViewController: hosting)
             window.title = "BindAll Settings"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.isReleasedWhenClosed = false
@@ -196,5 +211,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - Action menu items
+
+    private func actionMenuItem(_ title: String, shortcut: String, action: Selector, tab: CGFloat) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.attributedTitle = Self.menuTitle(title, shortcut: shortcut, tab: tab)
+        return item
+    }
+
+    /// Title with the shortcut in a secondary color, aligned to a `tab` column just past the widest
+    /// title. It is a non-functional hint: the real triggers are multi-press bursts that cannot be
+    /// represented as NSMenuItem key equivalents.
+    private static func menuTitle(_ title: String, shortcut: String, tab: CGFloat) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: tab)]
+        paragraph.lineBreakMode = .byClipping
+        let string = NSMutableAttributedString(string: "\(title)\t\(shortcut)")
+        string.addAttributes([.font: NSFont.menuFont(ofSize: 0),
+                              .paragraphStyle: paragraph],
+                             range: NSRange(location: 0, length: string.length))
+        let shortcutStart = (title as NSString).length + 1
+        string.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
+                            range: NSRange(location: shortcutStart, length: (shortcut as NSString).length))
+        return string
+    }
+
+    @objc private func menuFix() { coordinator.menuFix() }
+    @objc private func menuTranslate() { coordinator.menuTranslate() }
+    @objc private func menuScreenTranslate() { coordinator.menuScreenTranslate() }
+    @objc private func menuQuickTranslate() { coordinator.menuQuickTranslate() }
+    @objc private func menuCorrect() { coordinator.menuCorrect() }
+}
+
+/// A window that closes on Esc (cancelOperation), used for the Settings window.
+final class EscClosableWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        performClose(nil)
     }
 }

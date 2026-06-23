@@ -30,9 +30,10 @@ enum SelectionReader {
         let before = pb.changeCount
         TextInjector.copySelection()
 
-        let deadline = Date().addingTimeInterval(0.35)
+        // Poll finely so we return as soon as the copy lands instead of waiting a fixed delay.
+        let deadline = Date().addingTimeInterval(0.22)
         while pb.changeCount == before && Date() < deadline {
-            usleep(15_000)
+            usleep(6_000)
         }
 
         guard pb.changeCount != before else {

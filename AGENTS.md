@@ -18,7 +18,7 @@ custom prompts, on-device translation, and screen-region OCR translation.
 BindAll/
 ├── App/
 │   ├── BindAllApp.swift        # @main; placeholder SwiftUI Settings scene — UI is AppKit-driven
-│   ├── AppDelegate.swift       # NSStatusItem menu, settings window, processing icon, login toggle
+│   ├── AppDelegate.swift       # NSStatusItem menu (actions + shortcuts), settings window, icon, login
 │   └── AppState.swift          # ObservableObject: settings persistence, Keychain keys, isProcessing
 ├── Hotkeys/
 │   ├── HotkeyMonitor.swift     # CGEventTap; detects N presses of key+modifiers within a time window
@@ -31,6 +31,7 @@ BindAll/
 │   ├── AIEngine.swift          # protocol + EngineError
 │   ├── AppleFoundationEngine.swift   # FoundationModels on-device LLM (temperature 0)
 │   ├── OpenAICompatibleEngine.swift  # DeepSeek / OpenRouter / OpenAI / Ollama (one client)
+│   ├── LanguageToolEngine.swift      # LanguageTool grammar/spell correction (the "Correct" action)
 │   ├── TranslationService.swift      # Apple Translation framework + NL language detection
 │   └── OCRService.swift        # screencapture region + Vision text recognition
 ├── Actions/
@@ -41,6 +42,7 @@ BindAll/
 │   ├── SettingsView.swift      # tabs: General, Actions, Providers, Translation, Hotkeys
 │   ├── ActionKeysSettingsView.swift
 │   ├── ProvidersSettingsView.swift
+│   ├── HistoryPanelView.swift  # History list shown as a popover from the menu bar (click = copy)
 │   └── PopupController.swift   # floating NSPanel for translation/results (Copy/Close)
 └── Store/
     ├── Settings.swift          # Codable settings, ProviderKind, HotkeyConfig
@@ -58,11 +60,15 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Cmd+C ×3** → translate the selection, shown in a popup near the cursor
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
 - **Shift+Cmd+E** → Quick Translate window
+- **Shift+Cmd+C** → Correct (LanguageTool), only when enabled in Settings → General.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
+- **Esc** cancels an in-flight action.
 
 Because the Cmd+C triggers are the real copy shortcut, the selection is already on the pasteboard when
 a burst fires; the event tap is **listen-only** and does not consume the keystroke. Per-action-key
-shortcuts are not copy shortcuts, so they synthesize Cmd+C first (`SelectionReader.copyCurrentSelection`).
+shortcuts and Correct are not copy shortcuts, so they synthesize Cmd+C first
+(`SelectionReader.copyCurrentSelection`). A burst fires immediately once the highest configured press
+count for that key is reached (only counts with a larger sibling wait out the time window).
 
 ## Engines
 - **Engine for text actions** (`Settings → General`): Apple on-device, DeepSeek, OpenRouter, OpenAI,
@@ -70,6 +76,12 @@ shortcuts are not copy shortcuts, so they synthesize Cmd+C first (`SelectionRead
 - **Translation is always on-device** via Apple's `Translation` framework, regardless of the chosen
   engine. It uses a two-language pair (primary/secondary) and translates into whichever the source is
   not; the source is auto-detected with `NaturalLanguage`.
+- **Correct (LanguageTool)** is a separate, optional action (not in the engine dropdown). It sends the
+  selection to a LanguageTool server (public, self-hosted, or Premium) and applies the suggested fixes.
+  Configured under Providers; the Premium token lives in the Keychain.
+- **Writing results back:** the focused app + element are captured when an action starts; the result
+  is written directly into that element via the Accessibility API (so a focus change mid-flight does
+  not misplace it), falling back to re-activating the app and pasting via the clipboard.
 
 ## Build & test
 

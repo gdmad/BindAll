@@ -85,22 +85,16 @@ struct HotkeyConfig: Codable, Hashable {
     /// Virtual key code (kVK_*). Default 8 == "C".
     var keyCode: UInt16
     var modifiers: HotkeyModifiers
-    /// Number of presses required within `windowMilliseconds`.
+    /// Number of presses required to trigger. The detection window is a single app-wide constant
+    /// (`HotkeyMonitor.burstWindow`), not a stored setting.
     var repeatCount: Int
-    var windowMilliseconds: Int
 
-    static let defaultAction = HotkeyConfig(
-        keyCode: 8, modifiers: HotkeyModifiers(command: true), repeatCount: 2, windowMilliseconds: 600
-    )
-    static let translate = HotkeyConfig(
-        keyCode: 8, modifiers: HotkeyModifiers(command: true), repeatCount: 3, windowMilliseconds: 600
-    )
-    static let screenTranslate = HotkeyConfig(
-        keyCode: 14, modifiers: HotkeyModifiers(command: true), repeatCount: 1, windowMilliseconds: 400
-    )
-    static let quickTranslate = HotkeyConfig(
-        keyCode: 14, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1, windowMilliseconds: 400
-    )
+    static let defaultAction = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true), repeatCount: 2)
+    static let translate = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true), repeatCount: 3)
+    static let screenTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true), repeatCount: 1)
+    static let quickTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
+    /// Correct (LanguageTool): Cmd+Shift+C by default.
+    static let correct = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
 }
 
 // MARK: - Root settings
@@ -128,6 +122,14 @@ struct Settings: Codable, Equatable {
     // bidirectional (text is translated to whichever of source/target it is NOT).
     var sourceLanguage: String = "auto"   // BCP-47 code or "auto"
     var targetLanguage: String = "en"     // BCP-47 code
+
+    // Correct (LanguageTool): a separate, optional action with its own shortcut. The token (if any)
+    // lives in the Keychain; only non-secret config is stored here.
+    var correctEnabled: Bool = false
+    var languageToolBaseURL: String = "https://api.languagetool.org/v2"
+    var languageToolUsername: String = ""           // Premium only (account email)
+    var languageToolLanguage: String = "auto"        // BCP-47 code or "auto"
+    var correctHotkey: HotkeyConfig = .correct
 
     // Providers
     /// When set, the OpenRouter model list (Fetch) shows only free models.
@@ -159,6 +161,7 @@ extension Settings {
     enum CodingKeys: String, CodingKey {
         case enabled, defaultEngine, separator, defaultPrompt, actionKeys,
              restoreClipboard, maskAISlop, historyEnabled, sourceLanguage, targetLanguage,
+             correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
              screenTranslateHotkey, quickTranslateHotkey
     }
@@ -176,6 +179,11 @@ extension Settings {
         if let v = try c.decodeIfPresent(Bool.self, forKey: .historyEnabled) { historyEnabled = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .sourceLanguage) { sourceLanguage = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .targetLanguage) { targetLanguage = v }
+        if let v = try c.decodeIfPresent(Bool.self, forKey: .correctEnabled) { correctEnabled = v }
+        if let v = try c.decodeIfPresent(String.self, forKey: .languageToolBaseURL) { languageToolBaseURL = v }
+        if let v = try c.decodeIfPresent(String.self, forKey: .languageToolUsername) { languageToolUsername = v }
+        if let v = try c.decodeIfPresent(String.self, forKey: .languageToolLanguage) { languageToolLanguage = v }
+        if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .correctHotkey) { correctHotkey = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .openRouterFreeOnly) { openRouterFreeOnly = v }
         if let v = try c.decodeIfPresent([ProviderConfig].self, forKey: .providers) { providers = v }
         if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .defaultActionHotkey) { defaultActionHotkey = v }

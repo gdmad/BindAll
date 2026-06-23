@@ -23,15 +23,26 @@ struct SettingsView: View {
 
 // MARK: - Help hint
 
-/// A small question-mark icon that shows `text` as a tooltip on hover.
+/// A small question-mark icon that reveals `text` on hover (tooltip) and on click (popover).
 struct HelpHint: View {
     let text: String
+    @State private var showPopover = false
     init(_ text: String) { self.text = text }
     var body: some View {
-        Image(systemName: "questionmark.circle")
-            .foregroundStyle(.secondary)
-            .help(text)
-            .accessibilityLabel("Help")
+        Button { showPopover.toggle() } label: {
+            Image(systemName: "questionmark.circle")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Help")
+        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+            Text(text)
+                .font(.callout)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 280)
+                .padding(12)
+        }
     }
 }
 
@@ -65,6 +76,14 @@ struct GeneralSettingsView: View {
                 }
             } header: {
                 helpHeader("Engine", "Used for the default action and custom prompts. Translation always runs on-device via Apple's Translation framework.")
+            }
+
+            Section {
+                Toggle(isOn: $appState.settings.correctEnabled) {
+                    helpHeader("Enable Correct", "Adds a separate shortcut that fixes grammar and spelling in the selection with a LanguageTool server. Set its shortcut in Shortcuts and the server in Providers. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
+                }
+            } header: {
+                Text("Correct (LanguageTool)")
             }
 
             Section("Output") {
@@ -247,23 +266,30 @@ struct HotkeysSettingsView: View {
     var body: some View {
         let s = appState.settings
         let keyShortcuts = s.actionKeys.compactMap(\.hotkey)
+        let correct: [HotkeyConfig] = s.correctEnabled ? [s.correctHotkey] : []
         Form {
             Section {
                 LabeledContent("Default action") {
                     ShortcutRecorder(config: $appState.settings.defaultActionHotkey,
-                                     others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
+                                     others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
                 }
                 LabeledContent("Translate selection") {
                     ShortcutRecorder(config: $appState.settings.translateHotkey,
-                                     others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
+                                     others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
                 }
                 LabeledContent("Translate from screen (OCR)") {
                     ShortcutRecorder(config: $appState.settings.screenTranslateHotkey,
-                                     others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + keyShortcuts)
+                                     others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
                 }
                 LabeledContent("Quick Translate") {
                     ShortcutRecorder(config: $appState.settings.quickTranslateHotkey,
-                                     others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + keyShortcuts)
+                                     others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + correct + keyShortcuts)
+                }
+                if s.correctEnabled {
+                    LabeledContent("Correct (LanguageTool)") {
+                        ShortcutRecorder(config: $appState.settings.correctHotkey,
+                                         others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
+                    }
                 }
             } header: {
                 helpHeader("Shortcut", "Click a field and press the keys. Press the same combo several times for a repeat trigger (shown as e.g. Cmd+C+C). The default Cmd+C also copies, so the selection is captured automatically.")

@@ -26,6 +26,17 @@ struct AppleFoundationEngine: AIEngine {
         }
     }
 
+    /// Kept alive so the prewarmed session is not deallocated before the model finishes loading.
+    @MainActor private static var warmSession: LanguageModelSession?
+
+    /// Triggers model loading at launch so the first real request is not paying the cold-start cost.
+    @MainActor static func prewarm() {
+        guard availabilityStatus().available else { return }
+        let session = LanguageModelSession()
+        warmSession = session
+        session.prewarm()
+    }
+
     func process(text: String, instruction: String) async throws -> String {
         let status = Self.availabilityStatus()
         guard status.available else { throw EngineError.unavailable(status.message) }

@@ -106,6 +106,19 @@ eq(MaskAISlop.apply(to: "  a — b\n\tc \u{201C}d\u{201D}"), "  a - b\n\tc \"d\"
 eq(MaskAISlop.apply(to: "x 😀  y"), "x  y", "emoji strip swallows only one adjacent space")
 eq(MaskAISlop.apply(to: "😀line\nkeep  it"), "line\nkeep  it", "strip at start does not touch later spacing")
 
+print("LanguageTool applyMatches")
+func ltMatch(_ offset: Int, _ length: Int, _ replacement: String) -> [String: Any] {
+    ["offset": offset, "length": length, "replacements": [["value": replacement]]]
+}
+eq(LanguageToolEngine.applyMatches([ltMatch(0, 3, "the")], to: "teh cat"), "the cat", "single replacement")
+eq(LanguageToolEngine.applyMatches([ltMatch(0, 3, "the"), ltMatch(4, 3, "the")], to: "teh teh"),
+   "the the", "two replacements applied right-to-left")
+eq(LanguageToolEngine.applyMatches([], to: "no change"), "no change", "no matches keeps text")
+eq(LanguageToolEngine.applyMatches([["offset": 0, "length": 3]], to: "teh cat"),
+   "teh cat", "match without replacements is skipped")
+eq(LanguageToolEngine.applyMatches([ltMatch(100, 3, "x")], to: "short"),
+   "short", "out-of-range match is ignored")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")
