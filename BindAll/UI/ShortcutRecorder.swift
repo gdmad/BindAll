@@ -168,8 +168,7 @@ struct ShortcutRecorder: View {
 
     private func finalize() {
         guard let code = pendingKeyCode else { return }
-        let new = HotkeyConfig(keyCode: code, modifiers: pendingMods, repeatCount: pendingCount,
-                               windowMilliseconds: config?.windowMilliseconds ?? 400)
+        let new = HotkeyConfig(keyCode: code, modifiers: pendingMods, repeatCount: pendingCount)
         let isDuplicate = others.contains {
             $0.keyCode == new.keyCode && $0.modifiers == new.modifiers && $0.repeatCount == new.repeatCount
         }

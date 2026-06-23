@@ -17,4 +17,15 @@ enum EngineFactory {
             )
         }
     }
+
+    /// Builds the LanguageTool client used by the "Correct" action from settings + Keychain.
+    static func makeLanguageTool(appState: AppState) -> LanguageToolEngine {
+        let s = appState.settings
+        return LanguageToolEngine(
+            baseURL: s.languageToolBaseURL,
+            username: s.languageToolUsername,
+            apiKey: appState.languageToolToken(),
+            language: s.languageToolLanguage
+        )
+    }
 }

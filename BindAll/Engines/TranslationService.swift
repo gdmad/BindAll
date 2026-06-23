@@ -27,7 +27,11 @@ enum LanguageDetector {
         guard let dominant = recognizer.dominantLanguage else { return nil }
         let hypotheses = recognizer.languageHypotheses(withMaximum: 1)
         let confidence = hypotheses[dominant] ?? 0
-        guard confidence >= minimumConfidence else { return nil }
+        // Short inputs (a word or two) give NL low confidence even when the language is obvious, so
+        // the threshold is relaxed by length; longer inputs keep the stricter bar.
+        let count = text.trimmingCharacters(in: .whitespacesAndNewlines).count
+        let effectiveMin = count < 25 ? 0.15 : minimumConfidence
+        guard confidence >= effectiveMin else { return nil }
         return Locale.Language(identifier: dominant.rawValue)
     }
 }

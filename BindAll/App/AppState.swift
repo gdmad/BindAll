@@ -44,6 +44,19 @@ final class AppState: ObservableObject {
         objectWillChange.send()
     }
 
+    // MARK: - LanguageTool token (Keychain)
+
+    private static let languageToolAccount = "languagetool.apikey"
+
+    func languageToolToken() -> String {
+        KeychainStore.get(account: Self.languageToolAccount) ?? ""
+    }
+
+    func setLanguageToolToken(_ value: String) {
+        KeychainStore.set(value, account: Self.languageToolAccount)
+        objectWillChange.send()
+    }
+
     // MARK: - Provider config helpers
 
     func binding(for kind: ProviderKind) -> ProviderConfig {

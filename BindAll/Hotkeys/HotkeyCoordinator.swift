@@ -17,6 +17,11 @@ final class HotkeyCoordinator: ObservableObject {
     private var busyWatchdog: DispatchWorkItem?
     private var isBusy = false
 
+    // The in-flight engine task and the Esc monitors that can cancel it.
+    private var currentTask: Task<Void, Never>?
+    private var escGlobalMonitor: Any?
+    private var escLocalMonitor: Any?
+
     init(appState: AppState) {
         self.appState = appState
     }
@@ -91,13 +96,24 @@ final class HotkeyCoordinator: ObservableObject {
 
     private func reconfigureWatched() {
         let s = appState.settings
-        var watched: [WatchedHotkey] = []
-        let configs = [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey]
+        var configs = [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey]
             + s.actionKeys.compactMap(\.hotkey)
+        if s.correctEnabled { configs.append(s.correctHotkey) }
+
+        // Group configs that share key+modifiers so the monitor knows the highest press count to
+        // expect for that key and can fire immediately once it is reached.
+        var grouped: [String: WatchedHotkey] = [:]
         for hk in configs {
-            watched.append(WatchedHotkey(keyCode: hk.keyCode, modifiers: hk.modifiers, windowMilliseconds: hk.windowMilliseconds))
+            let m = hk.modifiers
+            let key = "\(hk.keyCode)|\(m.command)\(m.option)\(m.control)\(m.shift)"
+            if var existing = grouped[key] {
+                existing.maxRepeat = max(existing.maxRepeat, hk.repeatCount)
+                grouped[key] = existing
+            } else {
+                grouped[key] = WatchedHotkey(keyCode: hk.keyCode, modifiers: m, maxRepeat: hk.repeatCount)
+            }
         }
-        monitor.setWatched(watched)
+        monitor.setWatched(Array(grouped.values))
     }
 
     // MARK: - Burst handling
@@ -125,6 +141,8 @@ final class HotkeyCoordinator: ObservableObject {
             runTranslate()
         } else if matches(s.screenTranslateHotkey) {
             translateFromScreen()
+        } else if s.correctEnabled, matches(s.correctHotkey) {
+            runCorrect()
         } else if let key = s.actionKeys.first(where: { $0.hotkey.map(matches) == true }) {
             // A custom action key bound to its own shortcut: run its prompt on the selection.
             runDefaultAction(fixedInstruction: key.prompt)
@@ -136,10 +154,12 @@ final class HotkeyCoordinator: ObservableObject {
     private func beginBusy() {
         isBusy = true
         appState.isProcessing = true
+        installEscMonitor()
         busyWatchdog?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.isBusy = false
             self?.appState.isProcessing = false
+            self?.removeEscMonitor()
         }
         busyWatchdog = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: work)
@@ -150,22 +170,53 @@ final class HotkeyCoordinator: ObservableObject {
         busyWatchdog = nil
         isBusy = false
         appState.isProcessing = false
+        currentTask = nil
+        removeEscMonitor()
+    }
+
+    // MARK: - Esc cancellation
+
+    /// While busy, Esc (key code 53) cancels the in-flight engine task. A global monitor catches it
+    /// when another app has focus (the usual case); a local monitor catches it in our own windows.
+    private func installEscMonitor() {
+        guard escGlobalMonitor == nil, escLocalMonitor == nil else { return }
+        escGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { self?.currentTask?.cancel() }
+        }
+        escLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { self?.currentTask?.cancel(); return nil }
+            return event
+        }
+    }
+
+    private func removeEscMonitor() {
+        if let m = escGlobalMonitor { NSEvent.removeMonitor(m); escGlobalMonitor = nil }
+        if let m = escLocalMonitor { NSEvent.removeMonitor(m); escLocalMonitor = nil }
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
     }
 
     /// Runs the text pipeline on the current selection. With `fixedInstruction` (a per-key
     /// shortcut) the whole selection is the content; otherwise the separator/key syntax is parsed.
-    private func runDefaultAction(fixedInstruction: String? = nil) {
+    private func runDefaultAction(fixedInstruction: String? = nil, forceCopy: Bool = false) {
         let settings = appState.settings
         let engine = EngineFactory.make(kind: settings.defaultEngine, appState: appState)
         beginBusy()
+        // Capture where the result must land before the (possibly slow) engine call.
+        let target = TextInjector.FocusTarget.capture()
 
-        Task { [weak self] in
+        currentTask = Task { [weak self] in
             guard let self else { return }
             defer { self.endBusy() }
 
             // The default-action hotkey is Cmd+C-based, so the selection is already on the pasteboard.
-            // A per-action-key shortcut (fixedInstruction) does NOT copy, so we copy it ourselves.
-            let selection = (fixedInstruction != nil)
+            // A per-action-key shortcut (fixedInstruction) or a menu invocation (forceCopy) does NOT
+            // copy, so we copy it ourselves.
+            let selection = (fixedInstruction != nil || forceCopy)
                 ? SelectionReader.copyCurrentSelection()
                 : SelectionReader.currentSelection(previousChangeCount: Int.min)
 
@@ -193,31 +244,84 @@ final class HotkeyCoordinator: ObservableObject {
 
             do {
                 var result = try await engine.process(text: parsed.content, instruction: parsed.instruction)
+                if Task.isCancelled { return }
                 if settings.maskAISlop {
                     result = MaskAISlop.apply(to: result)
                 }
                 self.recordHistory(kind: .action, input: parsed.content, output: result,
                                    engine: settings.defaultEngine.displayName)
-                TextInjector.replaceSelection(with: result, restorePrevious: settings.restoreClipboard)
+                TextInjector.replaceSelection(with: result, restorePrevious: settings.restoreClipboard, target: target)
             } catch {
+                if self.isCancellation(error) { return }
                 self.popup.show(title: "Error", text: error.localizedDescription)
             }
         }
     }
 
-    private func runTranslate() {
+    /// Runs the LanguageTool "Correct" action on the current selection. The Correct shortcut is not a
+    /// copy shortcut, so the selection is copied first; the result is written back in place.
+    private func runCorrect() {
+        let settings = appState.settings
+        let engine = EngineFactory.makeLanguageTool(appState: appState)
+        beginBusy()
+        let target = TextInjector.FocusTarget.capture()
+
+        currentTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.endBusy() }
+
+            guard let text = SelectionReader.copyCurrentSelection(),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self.popup.show(title: "BindAll", text: "No text selected.")
+                return
+            }
+
+            do {
+                var result = try await engine.correct(text)
+                if Task.isCancelled { return }
+                if settings.maskAISlop {
+                    result = MaskAISlop.apply(to: result)
+                }
+                self.recordHistory(kind: .action, input: text, output: result, engine: "LanguageTool")
+                TextInjector.replaceSelection(with: result, restorePrevious: settings.restoreClipboard, target: target)
+            } catch {
+                if self.isCancellation(error) { return }
+                self.popup.show(title: "Correct", text: error.localizedDescription)
+            }
+        }
+    }
+
+    private func runTranslate(forceCopy: Bool = false) {
         beginBusy()
         Task { [weak self] in
             guard let self else { return }
             defer { self.endBusy() }
 
-            guard let text = SelectionReader.currentSelection(previousChangeCount: Int.min),
+            let selection = forceCopy
+                ? SelectionReader.copyCurrentSelection()
+                : SelectionReader.currentSelection(previousChangeCount: Int.min)
+            guard let text = selection,
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 self.popup.show(title: "BindAll", text: "No text selected.")
                 return
             }
             await self.translateAndShow(text, historyKind: .translate)
         }
+    }
+
+    // MARK: - Menu entry points
+
+    /// Invoked from the status menu. Runs after a short delay so the menu fully dismisses and focus
+    /// returns to the previously active app before the selection is copied.
+    func menuFix() { runFromMenu { self.runDefaultAction(forceCopy: true) } }
+    func menuTranslate() { runFromMenu { self.runTranslate(forceCopy: true) } }
+    func menuCorrect() { runFromMenu { self.runCorrect() } }
+    func menuScreenTranslate() { translateFromScreen() }
+    func menuQuickTranslate() { quickTranslate.toggle() }
+
+    private func runFromMenu(_ action: @escaping () -> Void) {
+        guard appState.settings.enabled, !isBusy else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: action)
     }
 
     /// Captures a screen region, OCRs it, then translates the recognized text. Triggered from the menu.
@@ -262,13 +366,28 @@ final class HotkeyCoordinator: ObservableObject {
         let target = Locale.Language(identifier: targetCode)
         let sourceDisplay = detectedCode.map { AppLanguages.name(for: $0) } ?? AppLanguages.name(for: sourceSetting)
 
-        let sourceConcrete = from ?? Locale.Language(identifier: "en")
-        guard await TranslationSupport.isInstalled(from: sourceConcrete, to: target) else {
-            popup.show(
-                title: "Translation",
-                text: "\(sourceDisplay) -> \(AppLanguages.name(for: targetCode)) is not downloaded yet. Open System Settings > General > Language & Region > Translation Languages to download it, then try again."
-            )
+        // Nothing to translate when the text is already in the target language. This is the common
+        // false trigger for the download prompt when the source is auto-detected.
+        if let detectedCode, detectedCode == targetCode {
+            popup.show(title: "Translation",
+                       text: "This text is already in \(AppLanguages.name(for: targetCode)).")
             return
+        }
+
+        // Only block on a missing language pack when the source is actually known and differs from
+        // the target (checking both directions, since a pack installed one way covers both). With an
+        // unknown source, let the Translation framework auto-detect and surface any real problem
+        // itself, rather than guessing a source and prompting to download something already present.
+        if let from, from.languageCode?.identifier != targetCode {
+            let forward = await TranslationSupport.isInstalled(from: from, to: target)
+            let backward = await TranslationSupport.isInstalled(from: target, to: from)
+            if !forward && !backward {
+                popup.show(
+                    title: "Translation",
+                    text: "\(sourceDisplay) -> \(AppLanguages.name(for: targetCode)) is not downloaded yet. Open System Settings > General > Language & Region > Translation Languages to download it, then try again."
+                )
+                return
+            }
         }
 
         do {

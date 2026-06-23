@@ -9,6 +9,12 @@ struct ProvidersSettingsView: View {
     @State private var isTesting = false
     @State private var models: [String] = []
 
+    // LanguageTool ("Correct") connection state.
+    @State private var ltTokenDraft: String = ""
+    @State private var ltStatus: String = ""
+    @State private var ltOK: Bool?
+    @State private var ltTesting = false
+
     private var cloudKinds: [ProviderKind] {
         ProviderKind.allCases.filter { $0 != .apple }
     }
@@ -92,6 +98,45 @@ struct ProvidersSettingsView: View {
                     Text(testStatus).font(.caption).foregroundStyle(.secondary)
                 }
             }
+
+            if appState.settings.correctEnabled {
+                Section {
+                    LabeledContent("Server URL") {
+                        TextField("", text: $appState.settings.languageToolBaseURL,
+                                  prompt: Text("https://api.languagetool.org/v2"))
+                            .labelsHidden().textFieldStyle(.plain).darkField()
+                    }
+                    LabeledContent("Language") {
+                        Picker("", selection: $appState.settings.languageToolLanguage) {
+                            Text("Auto Detect").tag(AppLanguages.autoTag)
+                            ForEach(AppLanguages.list, id: \.code) { Text($0.name).tag($0.code) }
+                        }
+                        .labelsHidden().fixedSize()
+                    }
+                    LabeledContent("Username / email") {
+                        TextField("", text: $appState.settings.languageToolUsername)
+                            .labelsHidden().textFieldStyle(.plain).darkField()
+                    }
+                    LabeledContent("API token") {
+                        SecureField("", text: $ltTokenDraft)
+                            .labelsHidden().textFieldStyle(.plain).darkField()
+                    }
+                    Button("Save token") { appState.setLanguageToolToken(ltTokenDraft) }
+                    HStack {
+                        Button(ltTesting ? "Testing…" : "Test connection") { testLanguageTool() }
+                            .disabled(ltTesting)
+                        if let ltOK {
+                            Image(systemName: ltOK ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(ltOK ? .green : .red)
+                        }
+                    }
+                    if !ltStatus.isEmpty {
+                        Text(ltStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    helpHeader("Correct (LanguageTool)", "Username and token are only for LanguageTool Premium; the public and self-hosted servers need just the URL. The public server is rate-limited and sends text to languagetool.org.")
+                }
+            }
         }
         .formStyle(.grouped)
         .clearFocusOnAppear()
@@ -100,9 +145,28 @@ struct ProvidersSettingsView: View {
 
     private func loadForSelection() {
         apiKeyDraft = appState.apiKey(for: selectedKind)
+        ltTokenDraft = appState.languageToolToken()
         models = []
         testStatus = ""
         testOK = nil
+    }
+
+    private func testLanguageTool() {
+        appState.setLanguageToolToken(ltTokenDraft)
+        ltTesting = true
+        ltStatus = ""
+        ltOK = nil
+        let engine = EngineFactory.makeLanguageTool(appState: appState)
+        Task {
+            do {
+                ltStatus = try await engine.testConnection()
+                ltOK = true
+            } catch {
+                ltStatus = error.localizedDescription
+                ltOK = false
+            }
+            ltTesting = false
+        }
     }
 
     private func testConnection() {

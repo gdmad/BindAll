@@ -10,6 +10,8 @@ swiftc -O \
     BindAll/Actions/PromptParser.swift \
     BindAll/Actions/MaskAISlop.swift \
     BindAll/Store/HistoryStore.swift \
+    BindAll/Engines/AIEngine.swift \
+    BindAll/Engines/LanguageToolEngine.swift \
     Tests/main.swift \
     -o "$OUT"
 
