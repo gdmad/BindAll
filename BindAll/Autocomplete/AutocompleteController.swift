@@ -26,11 +26,21 @@ final class AutocompleteController {
     // Fallback "current word" assembled from keystrokes when AX text is unavailable.
     private var typedBuffer = ""
 
+    // Configurable from Settings.
+    private var maxSuggestions = 5
+    private var horizontal = false
+
     private let minPrefix = 3
     /// Marks keystrokes we inject so the tap ignores them.
     private let injectedMarker: Int64 = 0x424E444C // "BNDL"
 
     var isRunning: Bool { eventTap != nil }
+
+    /// Applies user settings (count of suggestions and column/line layout).
+    func configure(maxSuggestions: Int, horizontal: Bool) {
+        self.maxSuggestions = max(1, min(9, maxSuggestions))
+        self.horizontal = horizontal
+    }
 
     func start() {
         guard eventTap == nil, AccessibilityPermission.isGranted else { return }
@@ -80,24 +90,27 @@ final class AutocompleteController {
         let flags = event.flags
         let modified = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
 
-        // While a suggestion is visible, consume the keys that drive it.
+        // While a suggestion is visible, consume the keys that drive it. The "previous/next" keys
+        // depend on the layout: Up/Down for a column, Left/Right for a line.
         if hasSuggestion, !modified {
-            switch keyCode {
-            case kVK_Tab:
+            let prevKey = horizontal ? kVK_LeftArrow : kVK_UpArrow
+            let nextKey = horizontal ? kVK_RightArrow : kVK_DownArrow
+            if keyCode == kVK_Tab {
                 let index = selectedIndex
                 DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
                 return nil
-            case kVK_UpArrow:
-                DispatchQueue.main.async { [weak self] in self?.move(-1) }
-                return nil
-            case kVK_DownArrow:
-                DispatchQueue.main.async { [weak self] in self?.move(1) }
-                return nil
-            case kVK_Escape:
+            }
+            if keyCode == kVK_Escape {
                 DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
                 return nil
-            default:
-                break
+            }
+            if keyCode == prevKey {
+                DispatchQueue.main.async { [weak self] in self?.move(-1) }
+                return nil
+            }
+            if keyCode == nextKey {
+                DispatchQueue.main.async { [weak self] in self?.move(1) }
+                return nil
             }
         }
 
@@ -145,19 +158,19 @@ final class AutocompleteController {
         }
 
         guard partial.count >= minPrefix else { clearSuggestion(); return }
-        let list = AutocompleteEngine.suggestions(for: partial, limit: 5)
+        let list = AutocompleteEngine.suggestions(for: partial, limit: maxSuggestions)
         guard !list.isEmpty else { clearSuggestion(); return }
 
         candidates = list
         selectedIndex = 0
         lastAnchor = anchor
-        overlay.show(list, selected: 0, topLeft: anchor)
+        overlay.show(list, selected: 0, horizontal: horizontal, topLeft: anchor)
     }
 
     private func move(_ delta: Int) {
         guard !candidates.isEmpty else { return }
         selectedIndex = max(0, min(candidates.count - 1, selectedIndex + delta))
-        overlay.show(candidates, selected: selectedIndex, topLeft: lastAnchor)
+        overlay.show(candidates, selected: selectedIndex, horizontal: horizontal, topLeft: lastAnchor)
     }
 
     private func accept(index: Int) {
@@ -251,14 +264,11 @@ final class AutocompleteController {
         return length > 0 ? String(utf16CodeUnits: chars, count: length) : ""
     }
 
+    /// Replaces the typed partial with the chosen word. Always deletes the partial and types the full
+    /// word so the inserted text matches the (recased) suggestion exactly, in every app.
     private func insert(word: String, replacing partial: String) {
-        if word.lowercased().hasPrefix(partial.lowercased()) {
-            let suffix = String(word.dropFirst(partial.count))
-            if !suffix.isEmpty { typeString(suffix) }
-        } else {
-            deleteBackward(count: (partial as NSString).length)
-            typeString(word)
-        }
+        deleteBackward(count: (partial as NSString).length)
+        typeString(word)
     }
 
     private func typeString(_ s: String) {

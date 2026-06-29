@@ -127,6 +127,12 @@ eq(AutocompleteEngine.partialWord(in: "appl", caretUTF16Offset: 2), "ap", "uses 
 eq(AutocompleteEngine.partialWord(in: "café", caretUTF16Offset: 4), "café", "accented letters kept")
 eq(AutocompleteEngine.partialWord(in: "", caretUTF16Offset: 0), "", "empty text")
 
+print("Autocomplete recased")
+eq(AutocompleteEngine.recased("apple", like: "App"), "Apple", "capitalized partial capitalizes")
+eq(AutocompleteEngine.recased("apple", like: "APP"), "APPLE", "all-caps partial uppercases")
+eq(AutocompleteEngine.recased("apple", like: "app"), "apple", "lowercase keeps dictionary case")
+eq(AutocompleteEngine.recased("iPhone", like: "iph"), "iPhone", "lowercase keeps proper-noun case")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")
