@@ -115,6 +115,9 @@ struct Settings: Codable, Equatable {
     // Text post-processing
     var maskAISlop: Bool = false
 
+    // Experimental: suggest a completion for the word being typed, accept with Tab.
+    var autocompleteEnabled: Bool = false
+
     // History of recent results (menu-bar submenu)
     var historyEnabled: Bool = true
 
@@ -160,7 +163,7 @@ struct Settings: Codable, Equatable {
 extension Settings {
     enum CodingKeys: String, CodingKey {
         case enabled, defaultEngine, separator, defaultPrompt, actionKeys,
-             restoreClipboard, maskAISlop, historyEnabled, sourceLanguage, targetLanguage,
+             restoreClipboard, maskAISlop, autocompleteEnabled, historyEnabled, sourceLanguage, targetLanguage,
              correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
              screenTranslateHotkey, quickTranslateHotkey
@@ -176,6 +179,7 @@ extension Settings {
         if let v = try c.decodeIfPresent([ActionKey].self, forKey: .actionKeys) { actionKeys = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .restoreClipboard) { restoreClipboard = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .maskAISlop) { maskAISlop = v }
+        if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteEnabled) { autocompleteEnabled = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .historyEnabled) { historyEnabled = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .sourceLanguage) { sourceLanguage = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .targetLanguage) { targetLanguage = v }
