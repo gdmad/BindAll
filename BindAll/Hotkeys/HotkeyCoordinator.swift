@@ -9,6 +9,7 @@ final class HotkeyCoordinator: ObservableObject {
     private let monitor = HotkeyMonitor()
     private let translationCoordinator = TranslationCoordinator()
     private let popup = PopupController()
+    private let autocomplete = AutocompleteController()
     private lazy var quickTranslate = QuickTranslateController(appState: appState)
 
     private var translationWindow: NSWindow?
@@ -36,12 +37,14 @@ final class HotkeyCoordinator: ObservableObject {
         }
         reconfigureWatched()
         _ = monitor.start()
+        updateAutocomplete()
 
         appState.$settings
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.reconfigureWatched()
                 self?.refreshStatus()
+                self?.updateAutocomplete()
             }
             .store(in: &cancellables)
 
@@ -55,7 +58,17 @@ final class HotkeyCoordinator: ObservableObject {
                     self.reconfigureWatched()
                     _ = self.monitor.start()
                 }
+                self.updateAutocomplete()
             }
+        }
+    }
+
+    /// Starts or stops the experimental autocomplete depending on the setting and Accessibility.
+    private func updateAutocomplete() {
+        if appState.settings.autocompleteEnabled, AccessibilityPermission.isGranted {
+            autocomplete.start()
+        } else {
+            autocomplete.stop()
         }
     }
 
@@ -63,6 +76,7 @@ final class HotkeyCoordinator: ObservableObject {
         retryTimer?.invalidate()
         retryTimer = nil
         monitor.stop()
+        autocomplete.stop()
         popup.close()
         translationWindow?.orderOut(nil)
     }

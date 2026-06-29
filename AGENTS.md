@@ -34,6 +34,10 @@ BindAll/
 │   ├── LanguageToolEngine.swift      # LanguageTool grammar/spell correction (the "Correct" action)
 │   ├── TranslationService.swift      # Apple Translation framework + NL language detection
 │   └── OCRService.swift        # screencapture region + Vision text recognition
+├── Autocomplete/               # experimental: word completion while typing (off by default)
+│   ├── AutocompleteEngine.swift     # NSSpellChecker completion + pure partial-word helper
+│   ├── AutocompleteController.swift # CGEventTap + AX read; shows / accepts (Tab) the suggestion
+│   └── AutocompleteOverlay.swift    # non-activating floating chip shown near the caret
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
@@ -63,6 +67,8 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Shift+Cmd+C** → Correct (LanguageTool), only when enabled in Settings → General.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
+- **Word autocomplete** (experimental, off by default; Settings -> General): as you type, a chip near
+  the caret suggests a completion; **Tab** accepts it. Native text fields only (AX-dependent).
 
 Because the Cmd+C triggers are the real copy shortcut, the selection is already on the pasteboard when
 a burst fires; the event tap is **listen-only** and does not consume the keystroke. Per-action-key

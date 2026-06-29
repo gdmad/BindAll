@@ -86,6 +86,14 @@ struct GeneralSettingsView: View {
                 Text("Correct (LanguageTool)")
             }
 
+            Section {
+                Toggle(isOn: $appState.settings.autocompleteEnabled) {
+                    helpHeader("Word autocomplete", "Experimental. As you type, suggests a completion for the current word in a small chip near the cursor; press Tab to accept. Works best in native macOS text fields; many Electron/web apps (Slack, browsers) do not expose the needed text info, so nothing appears there.")
+                }
+            } header: {
+                Text("Autocomplete (experimental)")
+            }
+
             Section("Output") {
                 Toggle(isOn: $appState.settings.restoreClipboard) {
                     helpHeader("Restore clipboard after replacing", "When replacing the selection, BindAll puts the result on the clipboard and pastes it. With this on, your previous clipboard contents are restored a moment after pasting, so the tool does not overwrite what you had copied. Off: the result stays on the clipboard.")

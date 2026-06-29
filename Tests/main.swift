@@ -119,6 +119,14 @@ eq(LanguageToolEngine.applyMatches([["offset": 0, "length": 3]], to: "teh cat"),
 eq(LanguageToolEngine.applyMatches([ltMatch(100, 3, "x")], to: "short"),
    "short", "out-of-range match is ignored")
 
+print("Autocomplete partialWord")
+eq(AutocompleteEngine.partialWord(in: "hello wor", caretUTF16Offset: 9), "wor", "partial mid-typing")
+eq(AutocompleteEngine.partialWord(in: "hello ", caretUTF16Offset: 6), "", "empty right after a space")
+eq(AutocompleteEngine.partialWord(in: "hello.wor", caretUTF16Offset: 9), "wor", "word starts after punctuation")
+eq(AutocompleteEngine.partialWord(in: "appl", caretUTF16Offset: 2), "ap", "uses only text left of the caret")
+eq(AutocompleteEngine.partialWord(in: "café", caretUTF16Offset: 4), "café", "accented letters kept")
+eq(AutocompleteEngine.partialWord(in: "", caretUTF16Offset: 0), "", "empty text")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")
