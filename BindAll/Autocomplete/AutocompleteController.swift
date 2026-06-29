@@ -1,22 +1,30 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Experimental word autocomplete. Watches typing with a CGEventTap, reads the focused field via the
-/// Accessibility API to find the word being typed and the caret position, asks `AutocompleteEngine`
-/// for a completion, and shows it in a floating chip near the caret. Pressing Tab while a suggestion
-/// is visible inserts the missing suffix.
+/// Experimental word autocomplete. Watches typing with a CGEventTap and suggests completions:
+///   - In apps that expose it, the focused field's text + caret are read via the Accessibility API.
+///   - Elsewhere (Electron/web), the current word is assembled from the observed keystrokes and the
+///     chip is anchored near the mouse.
+/// A list of candidates is shown near the caret; Up/Down move the selection and Tab inserts it.
 ///
-/// Everything runs on the main thread (the tap source is attached to the main run loop and all
-/// deferred work is dispatched to main), so the synchronous suppression decision and the UI calls are
-/// consistent without extra synchronization.
+/// Everything runs on the main thread (the tap source is on the main run loop and deferred work is
+/// dispatched to main), so the synchronous suppression decision and the UI calls stay consistent.
 final class AutocompleteController {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let overlay = AutocompleteOverlay()
 
     private var debounce: DispatchWorkItem?
-    private var hasSuggestion = false
-    private var pendingSuffix = ""
+
+    // Current suggestion state.
+    private var candidates: [String] = []
+    private var selectedIndex = 0
+    private var partial = ""
+    private var lastAnchor = NSPoint.zero
+    private var hasSuggestion: Bool { !candidates.isEmpty }
+
+    // Fallback "current word" assembled from keystrokes when AX text is unavailable.
+    private var typedBuffer = ""
 
     private let minPrefix = 3
     /// Marks keystrokes we inject so the tap ignores them.
@@ -32,7 +40,7 @@ final class AutocompleteController {
             let controller = Unmanaged<AutocompleteController>.fromOpaque(refcon).takeUnretainedValue()
             return controller.handle(type: type, event: event)
         }
-        // Not listen-only: the tap must be able to suppress Tab when a suggestion is showing.
+        // Not listen-only: the tap must be able to suppress Tab / arrows while a suggestion is showing.
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                           options: .defaultTap, eventsOfInterest: CGEventMask(mask),
                                           callback: callback,
@@ -51,7 +59,7 @@ final class AutocompleteController {
         eventTap = nil
         debounce?.cancel()
         debounce = nil
-        clearSuggestion()
+        resetWord()
     }
 
     // MARK: - Event handling
@@ -72,59 +80,108 @@ final class AutocompleteController {
         let flags = event.flags
         let modified = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
 
-        // Accept with Tab while a suggestion is visible: suppress the Tab and insert the suffix.
-        if keyCode == kVK_Tab, hasSuggestion, !modified {
-            let suffix = pendingSuffix
-            DispatchQueue.main.async { [weak self] in self?.accept(suffix: suffix) }
-            return nil
+        // While a suggestion is visible, consume the keys that drive it.
+        if hasSuggestion, !modified {
+            switch keyCode {
+            case kVK_Tab:
+                let index = selectedIndex
+                DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
+                return nil
+            case kVK_UpArrow:
+                DispatchQueue.main.async { [weak self] in self?.move(-1) }
+                return nil
+            case kVK_DownArrow:
+                DispatchQueue.main.async { [weak self] in self?.move(1) }
+                return nil
+            case kVK_Escape:
+                DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
+                return nil
+            default:
+                break
+            }
         }
 
-        DispatchQueue.main.async { [weak self] in self?.scheduleRefresh(keyCode: keyCode, modified: modified) }
+        let typed = unicodeString(from: event)
+        DispatchQueue.main.async { [weak self] in self?.onKey(keyCode: keyCode, typed: typed, modified: modified) }
         return Unmanaged.passUnretained(event)
     }
 
-    private func scheduleRefresh(keyCode: Int, modified: Bool) {
-        let dismissKeys: Set<Int> = [kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter, kVK_Tab, kVK_Space,
-                                     kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
-                                     kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown]
-        if modified || dismissKeys.contains(keyCode) {
-            clearSuggestion()
+    private func onKey(keyCode: Int, typed: String, modified: Bool) {
+        let navKeys: Set<Int> = [kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter, kVK_LeftArrow, kVK_RightArrow,
+                                 kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_Space]
+        if modified || navKeys.contains(keyCode) {
+            resetWord()
             return
         }
+        if keyCode == kVK_Delete {
+            typedBuffer = String(typedBuffer.dropLast())
+        } else if typed.count == 1, let scalar = typed.unicodeScalars.first, CharacterSet.letters.contains(scalar) {
+            typedBuffer.append(typed)
+        } else {
+            resetWord() // boundary (digit, punctuation, etc.)
+            return
+        }
+
         debounce?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.refresh() }
         debounce = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.09, execute: work)
     }
 
+    // MARK: - Suggestion lifecycle
+
     private func refresh() {
-        guard let info = focusedTextInfo() else { clearSuggestion(); return }
-        let partial = AutocompleteEngine.partialWord(in: info.text, caretUTF16Offset: info.caret)
-        guard partial.count >= minPrefix,
-              let completion = AutocompleteEngine.completion(for: partial),
-              completion.count > partial.count,
-              let rect = caretRect(for: info.element, caret: info.caret) else {
-            clearSuggestion()
-            return
+        let anchor: NSPoint
+        switch focusState() {
+        case .secure:
+            resetWord(); return
+        case .text(let info):
+            partial = AutocompleteEngine.partialWord(in: info.text, caretUTF16Offset: info.caret)
+            typedBuffer = partial // keep the fallback buffer in sync with the truth
+            anchor = caretAnchor(for: info.element, caret: info.caret) ?? mouseAnchor()
+        case .unavailable:
+            partial = typedBuffer
+            anchor = mouseAnchor()
         }
-        pendingSuffix = String(completion.dropFirst(partial.count))
-        hasSuggestion = true
-        overlay.show(completion, at: rect)
+
+        guard partial.count >= minPrefix else { clearSuggestion(); return }
+        let list = AutocompleteEngine.suggestions(for: partial, limit: 5)
+        guard !list.isEmpty else { clearSuggestion(); return }
+
+        candidates = list
+        selectedIndex = 0
+        lastAnchor = anchor
+        overlay.show(list, selected: 0, topLeft: anchor)
     }
 
-    private func accept(suffix: String) {
+    private func move(_ delta: Int) {
+        guard !candidates.isEmpty else { return }
+        selectedIndex = max(0, min(candidates.count - 1, selectedIndex + delta))
+        overlay.show(candidates, selected: selectedIndex, topLeft: lastAnchor)
+    }
+
+    private func accept(index: Int) {
+        guard index >= 0, index < candidates.count else { clearSuggestion(); return }
+        let word = candidates[index]
+        let current = partial
+        typedBuffer = word
         clearSuggestion()
-        guard !suffix.isEmpty else { return }
-        typeString(suffix)
+        insert(word: word, replacing: current)
     }
 
     private func clearSuggestion() {
-        hasSuggestion = false
-        pendingSuffix = ""
+        candidates = []
+        selectedIndex = 0
         overlay.hide()
     }
 
-    // MARK: - Accessibility reads
+    private func resetWord() {
+        typedBuffer = ""
+        partial = ""
+        clearSuggestion()
+    }
+
+    // MARK: - Accessibility
 
     private struct TextInfo {
         let element: AXUIElement
@@ -132,26 +189,42 @@ final class AutocompleteController {
         let caret: Int
     }
 
-    private func focusedTextInfo() -> TextInfo? {
+    private enum FocusState {
+        case secure
+        case text(TextInfo)
+        case unavailable
+    }
+
+    private func focusState() -> FocusState {
         let system = AXUIElementCreateSystemWide()
         var focused: AnyObject?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let f = focused else { return nil }
+              let f = focused else { return .unavailable }
         let element = f as! AXUIElement
+
+        // Never autocomplete in a password field.
+        var subroleRef: AnyObject?
+        if AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef) == .success,
+           let subrole = subroleRef as? String, subrole == (kAXSecureTextFieldSubrole as String) {
+            return .secure
+        }
 
         var valueRef: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-              let text = valueRef as? String else { return nil }
+              let text = valueRef as? String else { return .unavailable }
 
         var rangeRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success else { return nil }
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success else {
+            return .unavailable
+        }
         var range = CFRange()
-        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range), range.length == 0 else { return nil }
+        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range), range.length == 0 else { return .unavailable }
 
-        return TextInfo(element: element, text: text, caret: range.location)
+        return .text(TextInfo(element: element, text: text, caret: range.location))
     }
 
-    private func caretRect(for element: AXUIElement, caret: Int) -> CGRect? {
+    /// AppKit screen point just below the caret, derived from the AX caret rect (Quartz, top-left).
+    private func caretAnchor(for element: AXUIElement, caret: Int) -> NSPoint? {
         var cfRange = CFRange(location: max(0, caret - 1), length: 1)
         guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return nil }
         var boundsRef: AnyObject?
@@ -159,10 +232,34 @@ final class AutocompleteController {
                                                          rangeValue, &boundsRef) == .success else { return nil }
         var rect = CGRect.zero
         guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect), rect.width > 0 || rect.height > 0 else { return nil }
-        return rect
+        let primaryHeight = (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?
+            .frame.height ?? rect.maxY
+        return NSPoint(x: rect.minX, y: primaryHeight - rect.maxY)
+    }
+
+    private func mouseAnchor() -> NSPoint {
+        let p = NSEvent.mouseLocation
+        return NSPoint(x: p.x, y: p.y - 18)
     }
 
     // MARK: - Injection
+
+    private func unicodeString(from event: CGEvent) -> String {
+        var length = 0
+        var chars = [UniChar](repeating: 0, count: 4)
+        event.keyboardGetUnicodeString(maxStringLength: 4, actualStringLength: &length, unicodeString: &chars)
+        return length > 0 ? String(utf16CodeUnits: chars, count: length) : ""
+    }
+
+    private func insert(word: String, replacing partial: String) {
+        if word.lowercased().hasPrefix(partial.lowercased()) {
+            let suffix = String(word.dropFirst(partial.count))
+            if !suffix.isEmpty { typeString(suffix) }
+        } else {
+            deleteBackward(count: (partial as NSString).length)
+            typeString(word)
+        }
+    }
 
     private func typeString(_ s: String) {
         let source = CGEventSource(stateID: .combinedSessionState)
@@ -177,5 +274,18 @@ final class AutocompleteController {
         up.setIntegerValueField(.eventSourceUserData, value: injectedMarker)
         down.post(tap: .cgAnnotatedSessionEventTap)
         up.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    private func deleteBackward(count: Int) {
+        guard count > 0 else { return }
+        let source = CGEventSource(stateID: .combinedSessionState)
+        for _ in 0..<count {
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: false) else { continue }
+            down.setIntegerValueField(.eventSourceUserData, value: injectedMarker)
+            up.setIntegerValueField(.eventSourceUserData, value: injectedMarker)
+            down.post(tap: .cgAnnotatedSessionEventTap)
+            up.post(tap: .cgAnnotatedSessionEventTap)
+        }
     }
 }
