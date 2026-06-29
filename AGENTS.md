@@ -79,9 +79,9 @@ count for that key is reached (only counts with a larger sibling wait out the ti
 - **Correct (LanguageTool)** is a separate, optional action (not in the engine dropdown). It sends the
   selection to a LanguageTool server (public, self-hosted, or Premium) and applies the suggested fixes.
   Configured under Providers; the Premium token lives in the Keychain.
-- **Writing results back:** the focused app + element are captured when an action starts; the result
-  is written directly into that element via the Accessibility API (so a focus change mid-flight does
-  not misplace it), falling back to re-activating the app and pasting via the clipboard.
+- **Writing results back:** the frontmost app is captured when an action starts; the result is pasted
+  with Cmd+V (reliable across native and Electron/Chromium apps). If focus moved to another app while
+  the engine worked, the original app is re-activated first so the result lands where it started.
 
 ## Build & test
 
