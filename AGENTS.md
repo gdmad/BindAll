@@ -68,7 +68,8 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (experimental, off by default; Settings -> General): as you type, a short list
-  of completions appears near the caret; **Up/Down** choose, **Tab** inserts. Uses AX text+caret where
+  of case-matched completions appears near the caret; the **arrow keys** choose and **Tab** inserts.
+  Count and layout (column = Up/Down, line = Left/Right) are configurable. Uses AX text+caret where
   available, otherwise a keystroke buffer (works in most apps; chip position is best in native fields).
   Skipped in password fields.
 

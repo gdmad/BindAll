@@ -88,7 +88,15 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.autocompleteEnabled) {
-                    helpHeader("Word autocomplete", "Experimental. As you type, shows a short list of completions for the current word near the cursor; use Up/Down to choose and Tab to insert. Works in most apps (it falls back to tracking your keystrokes where the text cannot be read directly); the chip is positioned most precisely in native macOS text fields. Skipped in password fields.")
+                    helpHeader("Word autocomplete", "Experimental. As you type, shows a short list of completions for the current word near the cursor; choose with the arrow keys and press Tab to insert. Works in most apps (it falls back to tracking your keystrokes where the text cannot be read directly); the chip is positioned most precisely in native macOS text fields. Skipped in password fields.")
+                }
+                if appState.settings.autocompleteEnabled {
+                    Stepper("Suggestions: \(appState.settings.autocompleteCount)",
+                            value: $appState.settings.autocompleteCount, in: 1...9)
+                    Picker("Layout", selection: $appState.settings.autocompleteHorizontal) {
+                        Text("Column (Up/Down)").tag(false)
+                        Text("Line (Left/Right)").tag(true)
+                    }
                 }
             } header: {
                 Text("Autocomplete (experimental)")

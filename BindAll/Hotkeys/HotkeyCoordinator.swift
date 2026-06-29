@@ -65,6 +65,8 @@ final class HotkeyCoordinator: ObservableObject {
 
     /// Starts or stops the experimental autocomplete depending on the setting and Accessibility.
     private func updateAutocomplete() {
+        autocomplete.configure(maxSuggestions: appState.settings.autocompleteCount,
+                               horizontal: appState.settings.autocompleteHorizontal)
         if appState.settings.autocompleteEnabled, AccessibilityPermission.isGranted {
             autocomplete.start()
         } else {

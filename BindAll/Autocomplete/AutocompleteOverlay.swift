@@ -7,9 +7,9 @@ final class AutocompleteOverlay {
     private var panel: NSPanel?
 
     /// Shows `items` (with `selected` highlighted) anchored so its top-left sits at `topLeft`
-    /// (AppKit screen coordinates, bottom-left origin).
-    func show(_ items: [String], selected: Int, topLeft: NSPoint) {
-        let host = NSHostingController(rootView: ListView(items: items, selected: selected))
+    /// (AppKit screen coordinates, bottom-left origin). `horizontal` lays items in a line.
+    func show(_ items: [String], selected: Int, horizontal: Bool, topLeft: NSPoint) {
+        let host = NSHostingController(rootView: ListView(items: items, selected: selected, horizontal: horizontal))
         let panel = self.panel ?? makePanel()
         panel.contentViewController = host
         panel.layoutIfNeeded()
@@ -53,30 +53,42 @@ final class AutocompleteOverlay {
 private struct ListView: View {
     let items: [String]
     let selected: Int
+    let horizontal: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(items.enumerated()), id: \.offset) { index, word in
-                Text(word)
-                    .font(.system(size: 12, weight: index == selected ? .semibold : .regular))
-                    .lineLimit(1)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .frame(minWidth: 90, alignment: .leading)
-                    .background(index == selected ? Color.accentColor.opacity(0.25) : Color.clear)
+        VStack(alignment: .leading, spacing: 3) {
+            if horizontal {
+                HStack(spacing: 4) {
+                    ForEach(itemIndices, id: \.self) { chip($0) }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(itemIndices, id: \.self) { chip($0) }
+                }
             }
             HStack(spacing: 6) {
-                Text("\u{2191}\u{2193}").font(.system(size: 9))
+                Text(horizontal ? "\u{2190}\u{2192}" : "\u{2191}\u{2193}").font(.system(size: 9))
                 Text("Tab").font(.system(size: 9))
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.top, 2)
-            .padding(.bottom, 3)
+            .padding(.horizontal, 6)
         }
         .padding(4)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor)))
         .fixedSize()
+    }
+
+    private var itemIndices: [Int] { Array(items.indices) }
+
+    private func chip(_ index: Int) -> some View {
+        Text(items[index])
+            .font(.system(size: 12, weight: index == selected ? .semibold : .regular))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .frame(minWidth: horizontal ? nil : 90, alignment: .leading)
+            .background(index == selected ? Color.accentColor.opacity(0.25) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5))
     }
 }

@@ -46,6 +46,27 @@ enum AutocompleteEngine {
                 if out.count >= limit { break }
             }
         }
-        return out
+
+        // Recase each suggestion to the typed word's case pattern, de-duplicating again.
+        var result: [String] = []
+        for word in out {
+            let cased = recased(word, like: partial)
+            if !result.contains(cased) { result.append(cased) }
+        }
+        return result
+    }
+
+    /// Recases `candidate` to match the case pattern of `partial`: ALL CAPS, Capitalized first letter,
+    /// or the candidate's own (dictionary) case for lowercase / mixed input.
+    static func recased(_ candidate: String, like partial: String) -> String {
+        let letters = partial.filter { $0.isLetter }
+        guard !letters.isEmpty else { return candidate }
+        if letters.count >= 2, letters == letters.uppercased(), letters != letters.lowercased() {
+            return candidate.uppercased()
+        }
+        if let first = partial.first, first.isUppercase {
+            return candidate.prefix(1).uppercased() + candidate.dropFirst()
+        }
+        return candidate
     }
 }
