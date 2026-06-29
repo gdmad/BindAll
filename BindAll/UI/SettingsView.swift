@@ -97,6 +97,13 @@ struct GeneralSettingsView: View {
                         Text("Column (Up/Down)").tag(false)
                         Text("Line (Left/Right)").tag(true)
                     }
+                    Stepper("Text size: \(appState.settings.autocompleteFontSize)",
+                            value: $appState.settings.autocompleteFontSize, in: 10...20)
+                    Text(appState.settings.autocompleteHorizontal
+                         ? "Left / Right to choose, Tab to insert, Esc to dismiss."
+                         : "Up / Down to choose, Tab to insert, Esc to dismiss.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Autocomplete (experimental)")

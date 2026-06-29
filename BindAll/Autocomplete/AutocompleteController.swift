@@ -29,6 +29,7 @@ final class AutocompleteController {
     // Configurable from Settings.
     private var maxSuggestions = 5
     private var horizontal = false
+    private var fontSize: CGFloat = 13
 
     private let minPrefix = 3
     /// Marks keystrokes we inject so the tap ignores them.
@@ -36,10 +37,11 @@ final class AutocompleteController {
 
     var isRunning: Bool { eventTap != nil }
 
-    /// Applies user settings (count of suggestions and column/line layout).
-    func configure(maxSuggestions: Int, horizontal: Bool) {
+    /// Applies user settings (count of suggestions, column/line layout, text size).
+    func configure(maxSuggestions: Int, horizontal: Bool, fontSize: Int) {
         self.maxSuggestions = max(1, min(9, maxSuggestions))
         self.horizontal = horizontal
+        self.fontSize = CGFloat(max(10, min(20, fontSize)))
     }
 
     func start() {
@@ -164,13 +166,13 @@ final class AutocompleteController {
         candidates = list
         selectedIndex = 0
         lastAnchor = anchor
-        overlay.show(list, selected: 0, horizontal: horizontal, topLeft: anchor)
+        overlay.show(list, selected: 0, horizontal: horizontal, fontSize: fontSize, topLeft: anchor)
     }
 
     private func move(_ delta: Int) {
         guard !candidates.isEmpty else { return }
         selectedIndex = max(0, min(candidates.count - 1, selectedIndex + delta))
-        overlay.show(candidates, selected: selectedIndex, horizontal: horizontal, topLeft: lastAnchor)
+        overlay.show(candidates, selected: selectedIndex, horizontal: horizontal, fontSize: fontSize, topLeft: lastAnchor)
     }
 
     private func accept(index: Int) {
