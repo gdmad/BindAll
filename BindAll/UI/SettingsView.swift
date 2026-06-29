@@ -15,6 +15,8 @@ struct SettingsView: View {
                 .tabItem { Label("Translation", systemImage: "globe") }
             HotkeysSettingsView()
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+            AutocompleteSettingsView()
+                .tabItem { Label("Autocomplete", systemImage: "text.append") }
         }
         .padding(.top, 8)
         .frame(minWidth: 520, idealWidth: 560, minHeight: 478, idealHeight: 558)
@@ -88,22 +90,7 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.autocompleteEnabled) {
-                    helpHeader("Word autocomplete", "Experimental. As you type, shows a short list of completions for the current word near the cursor; choose with the arrow keys and press Tab to insert. Works in most apps (it falls back to tracking your keystrokes where the text cannot be read directly); the chip is positioned most precisely in native macOS text fields. Skipped in password fields.")
-                }
-                if appState.settings.autocompleteEnabled {
-                    Stepper("Suggestions: \(appState.settings.autocompleteCount)",
-                            value: $appState.settings.autocompleteCount, in: 1...9)
-                    Picker("Layout", selection: $appState.settings.autocompleteHorizontal) {
-                        Text("Column (Up/Down)").tag(false)
-                        Text("Line (Left/Right)").tag(true)
-                    }
-                    Stepper("Text size: \(appState.settings.autocompleteFontSize)",
-                            value: $appState.settings.autocompleteFontSize, in: 10...20)
-                    Text(appState.settings.autocompleteHorizontal
-                         ? "Left / Right to choose, Tab to insert, Esc to dismiss."
-                         : "Up / Down to choose, Tab to insert, Esc to dismiss.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    helpHeader("Word autocomplete", "Experimental. Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Configure it on the Autocomplete tab. Works in most apps; skipped in password fields.")
                 }
             } header: {
                 Text("Autocomplete (experimental)")
