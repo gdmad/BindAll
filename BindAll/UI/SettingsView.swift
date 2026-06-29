@@ -88,7 +88,7 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.autocompleteEnabled) {
-                    helpHeader("Word autocomplete", "Experimental. As you type, suggests a completion for the current word in a small chip near the cursor; press Tab to accept. Works best in native macOS text fields; many Electron/web apps (Slack, browsers) do not expose the needed text info, so nothing appears there.")
+                    helpHeader("Word autocomplete", "Experimental. As you type, shows a short list of completions for the current word near the cursor; use Up/Down to choose and Tab to insert. Works in most apps (it falls back to tracking your keystrokes where the text cannot be read directly); the chip is positioned most precisely in native macOS text fields. Skipped in password fields.")
                 }
             } header: {
                 Text("Autocomplete (experimental)")

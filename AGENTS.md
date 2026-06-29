@@ -67,8 +67,10 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Shift+Cmd+C** → Correct (LanguageTool), only when enabled in Settings → General.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
-- **Word autocomplete** (experimental, off by default; Settings -> General): as you type, a chip near
-  the caret suggests a completion; **Tab** accepts it. Native text fields only (AX-dependent).
+- **Word autocomplete** (experimental, off by default; Settings -> General): as you type, a short list
+  of completions appears near the caret; **Up/Down** choose, **Tab** inserts. Uses AX text+caret where
+  available, otherwise a keystroke buffer (works in most apps; chip position is best in native fields).
+  Skipped in password fields.
 
 Because the Cmd+C triggers are the real copy shortcut, the selection is already on the pasteboard when
 a burst fires; the event tap is **listen-only** and does not consume the keystroke. Per-action-key

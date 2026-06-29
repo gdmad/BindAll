@@ -1,6 +1,6 @@
 import AppKit
 
-/// Word completion backed by the system spell checker (`NSSpellChecker`), plus a pure helper for
+/// Word suggestions backed by the system spell checker (`NSSpellChecker`), plus a pure helper for
 /// extracting the word currently being typed. Used by the experimental autocomplete feature.
 enum AutocompleteEngine {
     /// The word being typed immediately to the left of the caret. Letters only; empty when the caret
@@ -18,21 +18,34 @@ enum AutocompleteEngine {
         return ns.substring(with: NSRange(location: start, length: caret - start))
     }
 
-    /// Top completion for `partial` that strictly extends it (case-insensitive prefix), or nil.
-    /// Must be called on the main thread (NSSpellChecker is main-thread only).
-    static func completion(for partial: String) -> String? {
-        guard !partial.isEmpty else { return nil }
+    /// Up to `limit` suggestions for `partial`: completions that extend it first, then spelling
+    /// guesses (corrections) for variety. Must be called on the main thread (NSSpellChecker is
+    /// main-thread only).
+    static func suggestions(for partial: String, limit: Int = 5) -> [String] {
+        guard !partial.isEmpty else { return [] }
         let checker = NSSpellChecker.shared
         checker.automaticallyIdentifiesLanguages = true
+        let language = checker.language()
         let range = NSRange(location: 0, length: (partial as NSString).length)
-        let candidates = checker.completions(forPartialWordRange: range, in: partial,
-                                             language: checker.language(),
-                                             inSpellDocumentWithTag: 0) ?? []
-        let lowerPartial = partial.lowercased()
-        for candidate in candidates where candidate.count > partial.count
-            && candidate.lowercased().hasPrefix(lowerPartial) {
-            return candidate
+        let lower = partial.lowercased()
+        var out: [String] = []
+
+        // Completions that extend the partial word.
+        for candidate in (checker.completions(forPartialWordRange: range, in: partial,
+                                              language: language, inSpellDocumentWithTag: 0) ?? []) {
+            if candidate.count > partial.count, candidate.lowercased().hasPrefix(lower), !out.contains(candidate) {
+                out.append(candidate)
+                if out.count >= limit { return out }
+            }
         }
-        return nil
+        // Spelling guesses (corrections) for additional variety.
+        for guess in (checker.guesses(forWordRange: range, in: partial,
+                                      language: language, inSpellDocumentWithTag: 0) ?? []) {
+            if guess.lowercased() != lower, !out.contains(guess) {
+                out.append(guess)
+                if out.count >= limit { break }
+            }
+        }
+        return out
     }
 }
