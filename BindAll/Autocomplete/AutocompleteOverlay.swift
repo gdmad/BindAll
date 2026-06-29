@@ -8,8 +8,9 @@ final class AutocompleteOverlay {
 
     /// Shows `items` (with `selected` highlighted) anchored so its top-left sits at `topLeft`
     /// (AppKit screen coordinates, bottom-left origin). `horizontal` lays items in a line.
-    func show(_ items: [String], selected: Int, horizontal: Bool, topLeft: NSPoint) {
-        let host = NSHostingController(rootView: ListView(items: items, selected: selected, horizontal: horizontal))
+    func show(_ items: [String], selected: Int, horizontal: Bool, fontSize: CGFloat, topLeft: NSPoint) {
+        let host = NSHostingController(rootView: ListView(items: items, selected: selected,
+                                                          horizontal: horizontal, fontSize: fontSize))
         let panel = self.panel ?? makePanel()
         panel.contentViewController = host
         panel.layoutIfNeeded()
@@ -54,24 +55,19 @@ private struct ListView: View {
     let items: [String]
     let selected: Int
     let horizontal: Bool
+    let fontSize: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        Group {
             if horizontal {
                 HStack(spacing: 4) {
                     ForEach(itemIndices, id: \.self) { chip($0) }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(itemIndices, id: \.self) { chip($0) }
                 }
             }
-            HStack(spacing: 6) {
-                Text(horizontal ? "\u{2190}\u{2192}" : "\u{2191}\u{2193}").font(.system(size: 9))
-                Text("Tab").font(.system(size: 9))
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
         }
         .padding(4)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -81,14 +77,17 @@ private struct ListView: View {
 
     private var itemIndices: [Int] { Array(items.indices) }
 
+    // Weight stays constant (only the background and color change on selection) so the layout does
+    // not resize as the selection moves.
     private func chip(_ index: Int) -> some View {
         Text(items[index])
-            .font(.system(size: 12, weight: index == selected ? .semibold : .regular))
+            .font(.system(size: fontSize, weight: .regular))
+            .foregroundStyle(index == selected ? Color.accentColor : Color.primary)
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .frame(minWidth: horizontal ? nil : 90, alignment: .leading)
-            .background(index == selected ? Color.accentColor.opacity(0.25) : Color.clear,
+            .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 5))
     }
 }

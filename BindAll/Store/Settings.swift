@@ -119,6 +119,7 @@ struct Settings: Codable, Equatable {
     var autocompleteEnabled: Bool = false
     var autocompleteCount: Int = 5            // how many suggestions to show (1...9)
     var autocompleteHorizontal: Bool = false  // false = column (Up/Down), true = line (Left/Right)
+    var autocompleteFontSize: Int = 13        // suggestion text size (10...20)
 
     // History of recent results (menu-bar submenu)
     var historyEnabled: Bool = true
@@ -166,7 +167,7 @@ extension Settings {
     enum CodingKeys: String, CodingKey {
         case enabled, defaultEngine, separator, defaultPrompt, actionKeys,
              restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteHorizontal,
-             historyEnabled, sourceLanguage, targetLanguage,
+             autocompleteFontSize, historyEnabled, sourceLanguage, targetLanguage,
              correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
              screenTranslateHotkey, quickTranslateHotkey
@@ -185,6 +186,7 @@ extension Settings {
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteEnabled) { autocompleteEnabled = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteCount) { autocompleteCount = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteHorizontal) { autocompleteHorizontal = v }
+        if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteFontSize) { autocompleteFontSize = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .historyEnabled) { historyEnabled = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .sourceLanguage) { sourceLanguage = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .targetLanguage) { targetLanguage = v }
