@@ -1,0 +1,18 @@
+{
+  // Minimal dev container whose only job is to run the GitHub CLI (`gh`) for cutting releases.
+  // The BindAll macOS app is built on the host with Xcode; this container does not build it.
+  "name": "bindall-gh",
+  "build": { "dockerfile": "Dockerfile" },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+
+  // Reuse a GH_TOKEN exported on the host, if any (so `gh` is authenticated without a login flow).
+  "remoteEnv": { "GH_TOKEN": "${localEnv:GH_TOKEN}" },
+
+  // Persist `gh auth login` between runs by binding the host's gh config directory.
+  "mounts": [
+    "source=${localEnv:HOME}/.config/gh,target=/root/.config/gh,type=bind,consistency=cached"
+  ],
+
+  "overrideCommand": true
+}
