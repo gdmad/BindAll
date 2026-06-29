@@ -27,9 +27,23 @@ final class AutocompleteController {
     private var typedBuffer = ""
 
     // Configurable from Settings.
-    private var maxSuggestions = 5
-    private var horizontal = false
-    private var fontSize: CGFloat = 13
+    enum AppFilterMode: String { case all, allow, deny }
+    struct Config {
+        var maxSuggestions = 5
+        var horizontal = false
+        var fontSize: CGFloat = 13
+        var language = "auto"
+        var learn = true
+        var nextWord = true
+        var acceptReturn = true
+        var appMode = AppFilterMode.all
+        var apps: Set<String> = []
+    }
+    private var config = Config()
+
+    /// The word completed before the current one (for next-word prediction and bigram learning).
+    private var prevWord = ""
+    private let store = AutocompleteLearningStore.shared
 
     private let minPrefix = 3
     /// Marks keystrokes we inject so the tap ignores them.
@@ -37,11 +51,9 @@ final class AutocompleteController {
 
     var isRunning: Bool { eventTap != nil }
 
-    /// Applies user settings (count of suggestions, column/line layout, text size).
-    func configure(maxSuggestions: Int, horizontal: Bool, fontSize: Int) {
-        self.maxSuggestions = max(1, min(9, maxSuggestions))
-        self.horizontal = horizontal
-        self.fontSize = CGFloat(max(10, min(20, fontSize)))
+    /// Applies user settings.
+    func configure(_ config: Config) {
+        self.config = config
     }
 
     func start() {
@@ -95,9 +107,10 @@ final class AutocompleteController {
         // While a suggestion is visible, consume the keys that drive it. The "previous/next" keys
         // depend on the layout: Up/Down for a column, Left/Right for a line.
         if hasSuggestion, !modified {
-            let prevKey = horizontal ? kVK_LeftArrow : kVK_UpArrow
-            let nextKey = horizontal ? kVK_RightArrow : kVK_DownArrow
-            if keyCode == kVK_Tab {
+            let prevKey = config.horizontal ? kVK_LeftArrow : kVK_UpArrow
+            let nextKey = config.horizontal ? kVK_RightArrow : kVK_DownArrow
+            let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
+            if keyCode == kVK_Tab || (isReturn && config.acceptReturn) {
                 let index = selectedIndex
                 DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
                 return nil
@@ -122,9 +135,17 @@ final class AutocompleteController {
     }
 
     private func onKey(keyCode: Int, typed: String, modified: Bool) {
+        if modified { resetWord(); return }
+
+        // Space completes the current word: learn it and (optionally) predict the next word.
+        if keyCode == kVK_Space || typed == " " {
+            handleWordBoundary()
+            return
+        }
+
         let navKeys: Set<Int> = [kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter, kVK_LeftArrow, kVK_RightArrow,
-                                 kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_Space]
-        if modified || navKeys.contains(keyCode) {
+                                 kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown]
+        if navKeys.contains(keyCode) {
             resetWord()
             return
         }
@@ -136,9 +157,27 @@ final class AutocompleteController {
             resetWord() // boundary (digit, punctuation, etc.)
             return
         }
+        scheduleRefresh()
+    }
 
+    private func handleWordBoundary() {
+        let finished = typedBuffer
+        if config.learn, !finished.isEmpty {
+            store.record(word: finished, after: prevWord.isEmpty ? nil : prevWord)
+        }
+        if !finished.isEmpty { prevWord = finished }
+        typedBuffer = ""
+        clearSuggestion()
+        if config.nextWord, !prevWord.isEmpty {
+            scheduleRefresh(nextWord: true)
+        }
+    }
+
+    private func scheduleRefresh(nextWord: Bool = false) {
         debounce?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.refresh() }
+        let work = DispatchWorkItem { [weak self] in
+            if nextWord { self?.nextWordRefresh() } else { self?.refresh() }
+        }
         debounce = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.09, execute: work)
     }
@@ -146,6 +185,7 @@ final class AutocompleteController {
     // MARK: - Suggestion lifecycle
 
     private func refresh() {
+        guard appAllowed() else { resetWord(); return }
         let anchor: NSPoint
         switch focusState() {
         case .secure:
@@ -160,26 +200,44 @@ final class AutocompleteController {
         }
 
         guard partial.count >= minPrefix else { clearSuggestion(); return }
-        let list = AutocompleteEngine.suggestions(for: partial, limit: maxSuggestions)
+        let learned = config.learn ? store.completions(matching: partial, limit: config.maxSuggestions) : []
+        let list = AutocompleteEngine.suggestions(for: partial, language: config.language,
+                                                  learned: learned, limit: config.maxSuggestions)
         guard !list.isEmpty else { clearSuggestion(); return }
 
         candidates = list
         selectedIndex = 0
         lastAnchor = anchor
-        overlay.show(list, selected: 0, horizontal: horizontal, fontSize: fontSize, topLeft: anchor)
+        overlay.show(list, selected: 0, horizontal: config.horizontal, fontSize: config.fontSize, topLeft: anchor)
+    }
+
+    /// Suggests the next word (with an empty partial) after a space, from the learned bigrams.
+    private func nextWordRefresh() {
+        guard appAllowed(), config.nextWord, !prevWord.isEmpty else { clearSuggestion(); return }
+        guard let anchor = currentAnchor() else { clearSuggestion(); return }
+        let words = store.nextWords(after: prevWord, limit: config.maxSuggestions)
+        guard !words.isEmpty else { clearSuggestion(); return }
+        partial = "" // nothing typed yet, so accept just types the word
+        candidates = words
+        selectedIndex = 0
+        lastAnchor = anchor
+        overlay.show(words, selected: 0, horizontal: config.horizontal, fontSize: config.fontSize, topLeft: anchor)
     }
 
     private func move(_ delta: Int) {
         guard !candidates.isEmpty else { return }
         selectedIndex = max(0, min(candidates.count - 1, selectedIndex + delta))
-        overlay.show(candidates, selected: selectedIndex, horizontal: horizontal, fontSize: fontSize, topLeft: lastAnchor)
+        overlay.show(candidates, selected: selectedIndex, horizontal: config.horizontal,
+                     fontSize: config.fontSize, topLeft: lastAnchor)
     }
 
     private func accept(index: Int) {
         guard index >= 0, index < candidates.count else { clearSuggestion(); return }
         let word = candidates[index]
         let current = partial
-        typedBuffer = word
+        if config.learn { store.record(word: word, after: prevWord.isEmpty ? nil : prevWord) }
+        prevWord = word
+        typedBuffer = ""
         clearSuggestion()
         insert(word: word, replacing: current)
     }
@@ -193,7 +251,26 @@ final class AutocompleteController {
     private func resetWord() {
         typedBuffer = ""
         partial = ""
+        prevWord = ""
         clearSuggestion()
+    }
+
+    private func appAllowed() -> Bool {
+        let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        if bundle == Bundle.main.bundleIdentifier { return false } // never in BindAll's own windows
+        switch config.appMode {
+        case .all: return true
+        case .allow: return config.apps.contains(bundle)
+        case .deny: return !config.apps.contains(bundle)
+        }
+    }
+
+    private func currentAnchor() -> NSPoint? {
+        switch focusState() {
+        case .secure: return nil
+        case .text(let info): return caretAnchor(for: info.element, caret: info.caret) ?? mouseAnchor()
+        case .unavailable: return mouseAnchor()
+        }
     }
 
     // MARK: - Accessibility
