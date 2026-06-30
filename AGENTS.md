@@ -34,12 +34,19 @@ BindAll/
 │   ├── LanguageToolEngine.swift      # LanguageTool grammar/spell correction (the "Correct" action)
 │   ├── TranslationService.swift      # Apple Translation framework + NL language detection
 │   └── OCRService.swift        # screencapture region + Vision text recognition
+├── Autocomplete/               # experimental: word completion while typing (off by default)
+│   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word
+│   ├── AutocompleteController.swift   # CGEventTap + AX/keystroke word; suggestions, next-word, accept
+│   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed
+│   ├── ru_bigrams.txt                 # bundled Russian bigram seed (Google Books, CC BY 3.0)
+│   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
 │   └── MaskAISlop.swift        # typography normalizer (dashes/quotes/emoji)
 ├── UI/
-│   ├── SettingsView.swift      # tabs: General, Actions, Providers, Translation, Hotkeys
+│   ├── SettingsView.swift      # tabs: General, Actions, Providers, Translation, Hotkeys, Autocomplete
+│   ├── AutocompleteSettingsView.swift  # autocomplete tab (count, layout, language, learning, per-app)
 │   ├── ActionKeysSettingsView.swift
 │   ├── ProvidersSettingsView.swift
 │   ├── HistoryPanelView.swift  # History list shown as a popover from the menu bar (click = copy)
@@ -63,6 +70,12 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Shift+Cmd+C** → Correct (LanguageTool), only when enabled in Settings → General.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
+- **Word autocomplete** (experimental, off by default; enable on General, configure on the Autocomplete
+  tab): as you type, a list of case-matched completions appears near the caret; arrow keys choose,
+  **Tab** (and optionally Return) inserts. It can predict the next word after a space and learn the
+  words you use (local `AutocompleteLearningStore`). Configurable: count, column/line layout, text
+  size, dictionary language, and per-app allow/deny. Uses AX text+caret where available, otherwise a
+  keystroke buffer (works in most apps). Skipped in password fields and BindAll's own windows.
 
 Because the Cmd+C triggers are the real copy shortcut, the selection is already on the pasteboard when
 a burst fires; the event tap is **listen-only** and does not consume the keystroke. Per-action-key
