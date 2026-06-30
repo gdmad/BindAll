@@ -15,6 +15,8 @@ struct SettingsView: View {
                 .tabItem { Label("Translation", systemImage: "globe") }
             HotkeysSettingsView()
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+            AutocompleteSettingsView()
+                .tabItem { Label("Autocomplete", systemImage: "text.append") }
         }
         .padding(.top, 8)
         .frame(minWidth: 520, idealWidth: 560, minHeight: 478, idealHeight: 558)
@@ -84,6 +86,14 @@ struct GeneralSettingsView: View {
                 }
             } header: {
                 Text("Correct (LanguageTool)")
+            }
+
+            Section {
+                Toggle(isOn: $appState.settings.autocompleteEnabled) {
+                    helpHeader("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Configure it on the Autocomplete tab. Works in most apps; skipped in password fields.")
+                }
+            } header: {
+                Text("Autocomplete")
             }
 
             Section("Output") {

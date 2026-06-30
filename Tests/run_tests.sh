@@ -12,6 +12,7 @@ swiftc -O \
     BindAll/Store/HistoryStore.swift \
     BindAll/Engines/AIEngine.swift \
     BindAll/Engines/LanguageToolEngine.swift \
+    BindAll/Autocomplete/AutocompleteEngine.swift \
     Tests/main.swift \
     -o "$OUT"
 
