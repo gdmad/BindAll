@@ -90,10 +90,10 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.autocompleteEnabled) {
-                    helpHeader("Word autocomplete", "Experimental. Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Configure it on the Autocomplete tab. Works in most apps; skipped in password fields.")
+                    helpHeader("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Configure it on the Autocomplete tab. Works in most apps; skipped in password fields.")
                 }
             } header: {
-                Text("Autocomplete (experimental)")
+                Text("Autocomplete")
             }
 
             Section("Output") {

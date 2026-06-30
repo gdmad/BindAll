@@ -21,13 +21,19 @@ enum AutocompleteEngine {
     /// Up to `limit` suggestions for `partial`: learned words first (already frequency-ordered), then
     /// dictionary completions that extend it, then spelling guesses. `language` is "auto" or a BCP-47
     /// code. Each result is recased to the typed word's case pattern. Main-thread only (NSSpellChecker).
-    static func suggestions(for partial: String, language: String, learned: [String], limit: Int) -> [String] {
+    /// `languages`: BCP-47 codes to query; empty means auto-detect a single language.
+    static func suggestions(for partial: String, languages: [String], learned: [String], limit: Int) -> [String] {
         guard !partial.isEmpty else { return [] }
         let lower = partial.lowercased()
         var out: [String] = []
 
         func addExtending(_ word: String) {
             guard word.count > partial.count, word.lowercased().hasPrefix(lower),
+                  !out.contains(where: { $0.lowercased() == word.lowercased() }) else { return }
+            out.append(word)
+        }
+        func addCorrection(_ word: String) {
+            guard word.lowercased() != lower,
                   !out.contains(where: { $0.lowercased() == word.lowercased() }) else { return }
             out.append(word)
         }
@@ -39,24 +45,29 @@ enum AutocompleteEngine {
 
         if out.count < limit {
             let checker = NSSpellChecker.shared
-            let lang: String
-            if language != "auto", !language.isEmpty {
-                lang = language
-            } else {
+            let langs: [String]
+            if languages.isEmpty {
                 checker.automaticallyIdentifiesLanguages = true
-                lang = checker.language()
+                langs = [checker.language()]
+            } else {
+                langs = languages
             }
             let range = NSRange(location: 0, length: (partial as NSString).length)
-            for candidate in (checker.completions(forPartialWordRange: range, in: partial,
-                                                  language: lang, inSpellDocumentWithTag: 0) ?? []) {
-                addExtending(candidate)
+            // Completions first (across all chosen languages), then guesses.
+            for lang in langs {
+                for candidate in (checker.completions(forPartialWordRange: range, in: partial,
+                                                      language: lang, inSpellDocumentWithTag: 0) ?? []) {
+                    addExtending(candidate)
+                    if out.count >= limit { break }
+                }
                 if out.count >= limit { break }
             }
             if out.count < limit {
-                for guess in (checker.guesses(forWordRange: range, in: partial,
-                                              language: lang, inSpellDocumentWithTag: 0) ?? []) {
-                    if guess.lowercased() != lower, !out.contains(where: { $0.lowercased() == guess.lowercased() }) {
-                        out.append(guess)
+                for lang in langs {
+                    for guess in (checker.guesses(forWordRange: range, in: partial,
+                                                  language: lang, inSpellDocumentWithTag: 0) ?? []) {
+                        addCorrection(guess)
+                        if out.count >= limit { break }
                     }
                     if out.count >= limit { break }
                 }

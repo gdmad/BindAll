@@ -71,7 +71,6 @@ private struct ListView: View {
         }
         .padding(4)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor)))
         .fixedSize()
     }
 
