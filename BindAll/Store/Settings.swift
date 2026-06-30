@@ -120,7 +120,7 @@ struct Settings: Codable, Equatable {
     var autocompleteCount: Int = 5            // how many suggestions to show (1...9)
     var autocompleteHorizontal: Bool = false  // false = column (Up/Down), true = line (Left/Right)
     var autocompleteFontSize: Int = 13        // suggestion text size (10...20)
-    var autocompleteLanguage: String = "auto" // dictionary language ("auto" or BCP-47)
+    var autocompleteLanguages: [String] = []  // dictionary languages (BCP-47); empty = auto-detect
     var autocompleteLearn: Bool = true        // learn accepted/typed words and rank them
     var autocompleteNextWord: Bool = true     // predict the next word after a space
     var autocompleteAcceptReturn: Bool = true // accept with Return in addition to Tab
@@ -173,7 +173,7 @@ extension Settings {
     enum CodingKeys: String, CodingKey {
         case enabled, defaultEngine, separator, defaultPrompt, actionKeys,
              restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteHorizontal,
-             autocompleteFontSize, autocompleteLanguage, autocompleteLearn, autocompleteNextWord,
+             autocompleteFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
              autocompleteAcceptReturn, autocompleteAppMode, autocompleteApps,
              historyEnabled, sourceLanguage, targetLanguage,
              correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
@@ -195,7 +195,7 @@ extension Settings {
         if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteCount) { autocompleteCount = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteHorizontal) { autocompleteHorizontal = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteFontSize) { autocompleteFontSize = v }
-        if let v = try c.decodeIfPresent(String.self, forKey: .autocompleteLanguage) { autocompleteLanguage = v }
+        if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteLanguages) { autocompleteLanguages = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteLearn) { autocompleteLearn = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteNextWord) { autocompleteNextWord = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteAcceptReturn) { autocompleteAcceptReturn = v }

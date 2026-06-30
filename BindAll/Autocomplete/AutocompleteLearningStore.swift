@@ -56,6 +56,28 @@ final class AutocompleteLearningStore {
         return following.sorted { $0.value > $1.value }.prefix(limit).map { $0.key }
     }
 
+    /// All learned words, most-used first (for the management UI).
+    func entries() -> [(word: String, count: Int)] {
+        model.wordCounts.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
+    }
+
+    /// Adds a custom word pinned to the top of suggestions (very high weight).
+    func add(custom word: String) {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 1, trimmed.allSatisfy({ $0.isLetter }) else { return }
+        model.wordCounts[trimmed] = max(model.wordCounts[trimmed] ?? 0, 1_000_000)
+        save()
+    }
+
+    func remove(word: String) {
+        model.wordCounts[word] = nil
+        for key in model.bigrams.keys {
+            model.bigrams[key]?[word] = nil
+            if model.bigrams[key]?.isEmpty == true { model.bigrams[key] = nil }
+        }
+        save()
+    }
+
     func clear() {
         model = Model()
         try? FileManager.default.removeItem(at: fileURL)

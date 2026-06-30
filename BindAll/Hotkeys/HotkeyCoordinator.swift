@@ -70,7 +70,7 @@ final class HotkeyCoordinator: ObservableObject {
         cfg.maxSuggestions = s.autocompleteCount
         cfg.horizontal = s.autocompleteHorizontal
         cfg.fontSize = CGFloat(max(10, min(20, s.autocompleteFontSize)))
-        cfg.language = s.autocompleteLanguage
+        cfg.languages = s.autocompleteLanguages
         cfg.learn = s.autocompleteLearn
         cfg.nextWord = s.autocompleteNextWord
         cfg.acceptReturn = s.autocompleteAcceptReturn

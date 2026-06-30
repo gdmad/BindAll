@@ -32,7 +32,7 @@ final class AutocompleteController {
         var maxSuggestions = 5
         var horizontal = false
         var fontSize: CGFloat = 13
-        var language = "auto"
+        var languages: [String] = []
         var learn = true
         var nextWord = true
         var acceptReturn = true
@@ -103,10 +103,11 @@ final class AutocompleteController {
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
         let modified = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
+        let shift = flags.contains(.maskShift)
 
-        // While a suggestion is visible, consume the keys that drive it. The "previous/next" keys
-        // depend on the layout: Up/Down for a column, Left/Right for a line.
-        if hasSuggestion, !modified {
+        // While a suggestion is visible, consume the keys that drive it — but only as bare keys (any
+        // modifier, including Shift, passes through, so e.g. Shift+Return still makes a newline).
+        if hasSuggestion, !modified, !shift {
             let prevKey = config.horizontal ? kVK_LeftArrow : kVK_UpArrow
             let nextKey = config.horizontal ? kVK_RightArrow : kVK_DownArrow
             let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
@@ -201,7 +202,7 @@ final class AutocompleteController {
 
         guard partial.count >= minPrefix else { clearSuggestion(); return }
         let learned = config.learn ? store.completions(matching: partial, limit: config.maxSuggestions) : []
-        let list = AutocompleteEngine.suggestions(for: partial, language: config.language,
+        let list = AutocompleteEngine.suggestions(for: partial, languages: config.languages,
                                                   learned: learned, limit: config.maxSuggestions)
         guard !list.isEmpty else { clearSuggestion(); return }
 
