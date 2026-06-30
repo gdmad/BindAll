@@ -140,6 +140,13 @@ Tests/        main.swift, run_tests.sh
 The visible UI (status item, settings window, popups) is driven from `AppDelegate` with AppKit; the
 SwiftUI `App` only hosts the settings views. See [AGENTS.md](AGENTS.md) for contributor conventions.
 
+## Credits
+
+- Russian next-word seed: bigram frequencies from
+  [orgtre/google-books-ngram-frequency](https://github.com/orgtre/google-books-ngram-frequency)
+  (derived from the Google Books Ngram Corpus), licensed
+  [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+
 ## License
 
 [MIT](LICENSE) © Evgeny Mishenko

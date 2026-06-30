@@ -37,7 +37,8 @@ BindAll/
 ├── Autocomplete/               # experimental: word completion while typing (off by default)
 │   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word
 │   ├── AutocompleteController.swift   # CGEventTap + AX/keystroke word; suggestions, next-word, accept
-│   ├── AutocompleteLearningStore.swift# learned word counts + bigrams (ranking + next-word prediction)
+│   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed
+│   ├── ru_bigrams.txt                 # bundled Russian bigram seed (Google Books, CC BY 3.0)
 │   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
