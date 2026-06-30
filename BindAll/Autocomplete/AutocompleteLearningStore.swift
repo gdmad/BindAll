@@ -26,6 +26,8 @@ final class AutocompleteLearningStore {
     }
 
     private var model = Model()
+    /// Bundled seed bigrams (Russian only) used as a final next-word backoff. Read-only.
+    private var seedBigrams: [String: [String: Int]] = [:]
     private let fileURL: URL
     private let maxWords = 5000
 
@@ -39,6 +41,20 @@ final class AutocompleteLearningStore {
             self.fileURL = dir.appendingPathComponent("autocomplete.json")
         }
         load()
+        loadSeed()
+    }
+
+    /// Loads the bundled Russian bigram seed (tab-separated: prev, next, freq). Missing file is fine.
+    private func loadSeed() {
+        guard let url = Bundle.main.url(forResource: "ru_bigrams", withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        var seed: [String: [String: Int]] = [:]
+        for line in text.split(separator: "\n") {
+            let cols = line.split(separator: "\t")
+            guard cols.count >= 3, let freq = Int(cols[2]) else { continue }
+            seed[String(cols[0]), default: [:]][String(cols[1])] = freq
+        }
+        seedBigrams = seed
     }
 
     var wordCount: Int { model.wordCounts.count }
@@ -83,6 +99,9 @@ final class AutocompleteLearningStore {
         }
         if out.count < limit {
             add(model.bigrams[prev1.lowercased()])
+        }
+        if out.count < limit {
+            add(seedBigrams[prev1.lowercased()]) // bundled Russian seed (lowest priority)
         }
         return Array(out.prefix(limit))
     }
