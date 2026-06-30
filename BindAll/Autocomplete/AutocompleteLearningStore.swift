@@ -8,7 +8,21 @@ final class AutocompleteLearningStore {
 
     private struct Model: Codable {
         var wordCounts: [String: Int] = [:]
-        var bigrams: [String: [String: Int]] = [:] // lowercased previous word -> (next word -> count)
+        var bigrams: [String: [String: Int]] = [:]   // lowercased prev word -> (next -> count)
+        var trigrams: [String: [String: Int]] = [:]  // "w2\tw1" (lowercased) -> (next -> count)
+
+        init() {}
+        // Resilient: an older file without trigrams still loads.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            wordCounts = try c.decodeIfPresent([String: Int].self, forKey: .wordCounts) ?? [:]
+            bigrams = try c.decodeIfPresent([String: [String: Int]].self, forKey: .bigrams) ?? [:]
+            trigrams = try c.decodeIfPresent([String: [String: Int]].self, forKey: .trigrams) ?? [:]
+        }
+    }
+
+    private static func trigramKey(_ w2: String, _ w1: String) -> String {
+        w2.lowercased() + "\t" + w1.lowercased()
     }
 
     private var model = Model()
@@ -29,12 +43,15 @@ final class AutocompleteLearningStore {
 
     var wordCount: Int { model.wordCounts.count }
 
-    /// Records a completed word and, when known, the word that preceded it.
-    func record(word: String, after previous: String?) {
+    /// Records a completed word with up to two preceding words (for bigram + trigram learning).
+    func record(word: String, prev1: String?, prev2: String?) {
         guard word.count >= 2, word.allSatisfy({ $0.isLetter }) else { return }
         model.wordCounts[word, default: 0] += 1
-        if let previous, !previous.isEmpty {
-            model.bigrams[previous.lowercased(), default: [:]][word, default: 0] += 1
+        if let p1 = prev1, !p1.isEmpty {
+            model.bigrams[p1.lowercased(), default: [:]][word, default: 0] += 1
+            if let p2 = prev2, !p2.isEmpty {
+                model.trigrams[Self.trigramKey(p2, p1), default: [:]][word, default: 0] += 1
+            }
         }
         prune()
         save()
@@ -50,10 +67,24 @@ final class AutocompleteLearningStore {
             .map { $0.key }
     }
 
-    /// Most likely words to follow `previous`, most-used first.
-    func nextWords(after previous: String, limit: Int) -> [String] {
-        guard let following = model.bigrams[previous.lowercased()] else { return [] }
-        return following.sorted { $0.value > $1.value }.prefix(limit).map { $0.key }
+    /// Most likely next words, using a trigram -> bigram backoff. `prev1` is the immediately previous
+    /// word; `prev2` the one before it (optional).
+    func nextWords(prev1: String, prev2: String?, limit: Int) -> [String] {
+        var out: [String] = []
+        func add(_ following: [String: Int]?) {
+            guard let following else { return }
+            for (word, _) in following.sorted(by: { $0.value > $1.value }) {
+                if !out.contains(word) { out.append(word) }
+                if out.count >= limit { break }
+            }
+        }
+        if let p2 = prev2, !p2.isEmpty {
+            add(model.trigrams[Self.trigramKey(p2, prev1)])
+        }
+        if out.count < limit {
+            add(model.bigrams[prev1.lowercased()])
+        }
+        return Array(out.prefix(limit))
     }
 
     /// All learned words, most-used first (for the management UI).
@@ -74,6 +105,10 @@ final class AutocompleteLearningStore {
         for key in model.bigrams.keys {
             model.bigrams[key]?[word] = nil
             if model.bigrams[key]?.isEmpty == true { model.bigrams[key] = nil }
+        }
+        for key in model.trigrams.keys {
+            model.trigrams[key]?[word] = nil
+            if model.trigrams[key]?.isEmpty == true { model.trigrams[key] = nil }
         }
         save()
     }

@@ -41,8 +41,9 @@ final class AutocompleteController {
     }
     private var config = Config()
 
-    /// The word completed before the current one (for next-word prediction and bigram learning).
+    /// The two words completed before the current one (for next-word prediction and n-gram learning).
     private var prevWord = ""
+    private var prevWord2 = ""
     private let store = AutocompleteLearningStore.shared
 
     private let minPrefix = 3
@@ -164,9 +165,11 @@ final class AutocompleteController {
     private func handleWordBoundary() {
         let finished = typedBuffer
         if config.learn, !finished.isEmpty {
-            store.record(word: finished, after: prevWord.isEmpty ? nil : prevWord)
+            store.record(word: finished,
+                         prev1: prevWord.isEmpty ? nil : prevWord,
+                         prev2: prevWord2.isEmpty ? nil : prevWord2)
         }
-        if !finished.isEmpty { prevWord = finished }
+        if !finished.isEmpty { prevWord2 = prevWord; prevWord = finished }
         typedBuffer = ""
         clearSuggestion()
         if config.nextWord, !prevWord.isEmpty {
@@ -216,7 +219,8 @@ final class AutocompleteController {
     private func nextWordRefresh() {
         guard appAllowed(), config.nextWord, !prevWord.isEmpty else { clearSuggestion(); return }
         guard let anchor = currentAnchor() else { clearSuggestion(); return }
-        let words = store.nextWords(after: prevWord, limit: config.maxSuggestions)
+        let words = store.nextWords(prev1: prevWord, prev2: prevWord2.isEmpty ? nil : prevWord2,
+                                    limit: config.maxSuggestions)
         guard !words.isEmpty else { clearSuggestion(); return }
         partial = "" // nothing typed yet, so accept just types the word
         candidates = words
@@ -236,7 +240,12 @@ final class AutocompleteController {
         guard index >= 0, index < candidates.count else { clearSuggestion(); return }
         let word = candidates[index]
         let current = partial
-        if config.learn { store.record(word: word, after: prevWord.isEmpty ? nil : prevWord) }
+        if config.learn {
+            store.record(word: word,
+                         prev1: prevWord.isEmpty ? nil : prevWord,
+                         prev2: prevWord2.isEmpty ? nil : prevWord2)
+        }
+        prevWord2 = prevWord
         prevWord = word
         typedBuffer = ""
         clearSuggestion()
@@ -253,6 +262,7 @@ final class AutocompleteController {
         typedBuffer = ""
         partial = ""
         prevWord = ""
+        prevWord2 = ""
         clearSuggestion()
     }
 
