@@ -197,7 +197,7 @@ final class AutocompleteController {
         case .text(let info):
             partial = AutocompleteEngine.partialWord(in: info.text, caretUTF16Offset: info.caret)
             typedBuffer = partial // keep the fallback buffer in sync with the truth
-            anchor = caretAnchor(for: info.element, caret: info.caret) ?? mouseAnchor()
+            anchor = self.anchor(for: info.element, caret: info.caret)
         case .unavailable:
             partial = typedBuffer
             anchor = mouseAnchor()
@@ -279,7 +279,7 @@ final class AutocompleteController {
     private func currentAnchor() -> NSPoint? {
         switch focusState() {
         case .secure: return nil
-        case .text(let info): return caretAnchor(for: info.element, caret: info.caret) ?? mouseAnchor()
+        case .text(let info): return anchor(for: info.element, caret: info.caret)
         case .unavailable: return mouseAnchor()
         }
     }
@@ -324,6 +324,28 @@ final class AutocompleteController {
         guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range), range.length == 0 else { return .unavailable }
 
         return .text(TextInfo(element: element, text: text, caret: range.location))
+    }
+
+    /// Best anchor for the chip: caret rect, else the focused element's frame, else the mouse.
+    private func anchor(for element: AXUIElement, caret: Int) -> NSPoint {
+        caretAnchor(for: element, caret: caret) ?? elementFrameAnchor(for: element) ?? mouseAnchor()
+    }
+
+    /// Bottom-left of the focused element's frame (many web/Electron fields expose a frame even when
+    /// they do not expose a caret rect). Quartz top-left origin -> AppKit bottom-left.
+    private func elementFrameAnchor(for element: AXUIElement) -> NSPoint? {
+        var posRef: AnyObject?
+        var sizeRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success else { return nil }
+        var pos = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(posRef as! AXValue, .cgPoint, &pos),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
+              size.width > 0, size.height > 0 else { return nil }
+        let primaryHeight = (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?
+            .frame.height ?? (pos.y + size.height)
+        return NSPoint(x: pos.x + 6, y: primaryHeight - (pos.y + size.height) + 6)
     }
 
     /// AppKit screen point just below the caret, derived from the AX caret rect (Quartz, top-left).

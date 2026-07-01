@@ -60,13 +60,16 @@ final class AutocompleteLearningStore {
     var wordCount: Int { model.wordCounts.count }
 
     /// Records a completed word with up to two preceding words (for bigram + trigram learning).
+    /// Learned words are stored lowercased so case variants ("Привет"/"привет") do not split; the
+    /// engine recases current-word completions to the typed prefix. (Custom words keep their case.)
     func record(word: String, prev1: String?, prev2: String?) {
-        guard word.count >= 2, word.allSatisfy({ $0.isLetter }) else { return }
-        model.wordCounts[word, default: 0] += 1
+        let w = word.lowercased()
+        guard w.count >= 2, w.allSatisfy({ $0.isLetter }) else { return }
+        model.wordCounts[w, default: 0] += 1
         if let p1 = prev1, !p1.isEmpty {
-            model.bigrams[p1.lowercased(), default: [:]][word, default: 0] += 1
+            model.bigrams[p1.lowercased(), default: [:]][w, default: 0] += 1
             if let p2 = prev2, !p2.isEmpty {
-                model.trigrams[Self.trigramKey(p2, p1), default: [:]][word, default: 0] += 1
+                model.trigrams[Self.trigramKey(p2, p1), default: [:]][w, default: 0] += 1
             }
         }
         prune()
@@ -149,6 +152,42 @@ final class AutocompleteLearningStore {
         guard let data = try? Data(contentsOf: fileURL),
               let decoded = try? JSONDecoder().decode(Model.self, from: data) else { return }
         model = decoded
+        normalizeCase()
+    }
+
+    /// One-time cleanup of pre-existing data: lowercase non-pinned learned words and all n-gram "next"
+    /// values so case variants merge. Pinned custom words (count >= 1_000_000) keep their case.
+    private func normalizeCase() {
+        func lowerNextValues(_ dict: [String: [String: Int]]) -> (result: [String: [String: Int]], changed: Bool) {
+            var out: [String: [String: Int]] = [:]
+            var changed = false
+            for (key, inner) in dict {
+                var merged: [String: Int] = [:]
+                for (word, count) in inner {
+                    let lw = word.lowercased()
+                    if lw != word { changed = true }
+                    merged[lw, default: 0] += count
+                }
+                out[key] = merged
+            }
+            return (out, changed)
+        }
+
+        var changed = false
+        var counts: [String: Int] = [:]
+        for (word, count) in model.wordCounts {
+            let key = count >= 1_000_000 ? word : word.lowercased()
+            if key != word { changed = true }
+            counts[key, default: 0] += count
+        }
+        model.wordCounts = counts
+
+        let (bg, bgChanged) = lowerNextValues(model.bigrams)
+        model.bigrams = bg
+        let (tg, tgChanged) = lowerNextValues(model.trigrams)
+        model.trigrams = tg
+
+        if changed || bgChanged || tgChanged { save() }
     }
 
     private func save() {

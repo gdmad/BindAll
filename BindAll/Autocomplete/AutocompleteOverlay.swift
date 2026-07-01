@@ -64,13 +64,13 @@ private struct ListView: View {
                     ForEach(itemIndices, id: \.self) { chip($0) }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(itemIndices, id: \.self) { chip($0) }
                 }
             }
         }
-        .padding(4)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .padding(2)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
         .fixedSize()
     }
 
@@ -83,10 +83,10 @@ private struct ListView: View {
             .font(.system(size: fontSize, weight: .regular))
             .foregroundStyle(index == selected ? Color.accentColor : Color.primary)
             .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .frame(minWidth: horizontal ? nil : 90, alignment: .leading)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .frame(maxWidth: horizontal ? nil : .infinity, alignment: .leading)
             .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 5))
+                        in: RoundedRectangle(cornerRadius: 4))
     }
 }

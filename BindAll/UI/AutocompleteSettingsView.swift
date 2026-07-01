@@ -68,7 +68,16 @@ struct AutocompleteSettingsView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    Button("Add app…") { addApp() }.controlSize(.small)
+                    Menu("Add app…") {
+                        Menu("Running apps") {
+                            ForEach(runningApps(), id: \.id) { app in
+                                Button(app.name) { addBundle(app.id) }
+                            }
+                        }
+                        Button("Choose from disk…") { addAppFromDisk() }
+                    }
+                    .controlSize(.small)
+                    .fixedSize()
                 }
             } header: {
                 helpHeader("Apps", "Limit where autocomplete runs. 'Only selected' shows it just in the listed apps; 'All except' disables it there.")
@@ -115,7 +124,27 @@ struct AutocompleteSettingsView: View {
         return bundleID
     }
 
-    private func addApp() {
+    private func addBundle(_ bundleID: String) {
+        if !appState.settings.autocompleteApps.contains(bundleID) {
+            appState.settings.autocompleteApps.append(bundleID)
+        }
+    }
+
+    /// Currently-running regular apps (includes Safari/Chrome web apps while they run), sorted by name.
+    private func runningApps() -> [(id: String, name: String)] {
+        let mine = Bundle.main.bundleIdentifier
+        var seen = Set<String>()
+        var apps: [(id: String, name: String)] = []
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular {
+            guard let id = app.bundleIdentifier, id != mine, !seen.contains(id) else { continue }
+            seen.insert(id)
+            apps.append((id: id, name: app.localizedName ?? id))
+        }
+        return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func addAppFromDisk() {
         let panel = NSOpenPanel()
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.allowedContentTypes = [.application]
@@ -123,9 +152,7 @@ struct AutocompleteSettingsView: View {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url,
               let bundleID = Bundle(url: url)?.bundleIdentifier else { return }
-        if !appState.settings.autocompleteApps.contains(bundleID) {
-            appState.settings.autocompleteApps.append(bundleID)
-        }
+        addBundle(bundleID)
     }
 }
 

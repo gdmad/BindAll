@@ -339,15 +339,24 @@ final class HotkeyCoordinator: ObservableObject {
 
     /// Invoked from the status menu. Runs after a short delay so the menu fully dismisses and focus
     /// returns to the previously active app before the selection is copied.
-    func menuFix() { runFromMenu { self.runDefaultAction(forceCopy: true) } }
-    func menuTranslate() { runFromMenu { self.runTranslate(forceCopy: true) } }
-    func menuCorrect() { runFromMenu { self.runCorrect() } }
+    private enum MenuAction { case fix, translate, correct }
+
+    func menuFix() { runFromMenu(.fix) }
+    func menuTranslate() { runFromMenu(.translate) }
+    func menuCorrect() { runFromMenu(.correct) }
     func menuScreenTranslate() { translateFromScreen() }
     func menuQuickTranslate() { quickTranslate.toggle() }
 
-    private func runFromMenu(_ action: @escaping () -> Void) {
+    private func runFromMenu(_ which: MenuAction) {
         guard appState.settings.enabled, !isBusy else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: action)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self else { return }
+            switch which {
+            case .fix: self.runDefaultAction(forceCopy: true)
+            case .translate: self.runTranslate(forceCopy: true)
+            case .correct: self.runCorrect()
+            }
+        }
     }
 
     /// Captures a screen region, OCRs it, then translates the recognized text. Triggered from the menu.
