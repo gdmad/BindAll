@@ -76,11 +76,17 @@ final class AutocompleteLearningStore {
         save()
     }
 
+    /// Words typed/accepted fewer than this many times haven't been confirmed as real words yet
+    /// (as opposed to one-off typos) and are excluded from suggestions, though still recorded.
+    /// Pinned custom words (weight 1_000_000) are always exempt.
+    private let minSurfaceCount = 2
+
     /// Learned words extending `partial` (case-insensitive), most-used first.
     func completions(matching partial: String, limit: Int) -> [String] {
         let lower = partial.lowercased()
         return model.wordCounts
-            .filter { $0.key.count > partial.count && $0.key.lowercased().hasPrefix(lower) }
+            .filter { $0.key.count > partial.count && $0.key.lowercased().hasPrefix(lower)
+                     && $0.value >= minSurfaceCount }
             .sorted { $0.value > $1.value }
             .prefix(limit)
             .map { $0.key }
@@ -90,21 +96,22 @@ final class AutocompleteLearningStore {
     /// word; `prev2` the one before it (optional).
     func nextWords(prev1: String, prev2: String?, limit: Int) -> [String] {
         var out: [String] = []
-        func add(_ following: [String: Int]?) {
+        func add(_ following: [String: Int]?, minCount: Int) {
             guard let following else { return }
-            for (word, _) in following.sorted(by: { $0.value > $1.value }) {
+            for (word, count) in following.sorted(by: { $0.value > $1.value }) {
+                guard count >= minCount else { continue }
                 if !out.contains(word) { out.append(word) }
                 if out.count >= limit { break }
             }
         }
         if let p2 = prev2, !p2.isEmpty {
-            add(model.trigrams[Self.trigramKey(p2, prev1)])
+            add(model.trigrams[Self.trigramKey(p2, prev1)], minCount: minSurfaceCount)
         }
         if out.count < limit {
-            add(model.bigrams[prev1.lowercased()])
+            add(model.bigrams[prev1.lowercased()], minCount: minSurfaceCount)
         }
         if out.count < limit {
-            add(seedBigrams[prev1.lowercased()]) // bundled Russian seed (lowest priority)
+            add(seedBigrams[prev1.lowercased()], minCount: 1) // bundled seed is pre-vetted, exempt
         }
         return Array(out.prefix(limit))
     }

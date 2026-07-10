@@ -15,6 +15,7 @@ final class AutocompleteController {
     private let overlay = AutocompleteOverlay()
 
     private var debounce: DispatchWorkItem?
+    private var appActivationObserver: NSObjectProtocol?
 
     // Current suggestion state.
     private var candidates: [String] = []
@@ -75,6 +76,12 @@ final class AutocompleteController {
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+
+        // Hide the popup the instant focus leaves BindAll's target app, instead of waiting for
+        // the next keystroke back in it to notice via appAllowed().
+        appActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.resetWord() }
     }
 
     func stop() {
@@ -82,6 +89,8 @@ final class AutocompleteController {
         if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         runLoopSource = nil
         eventTap = nil
+        if let observer = appActivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        appActivationObserver = nil
         debounce?.cancel()
         debounce = nil
         resetWord()
@@ -129,6 +138,9 @@ final class AutocompleteController {
                 DispatchQueue.main.async { [weak self] in self?.move(1) }
                 return nil
             }
+            // Any other key isn't part of the nav set: close the popup immediately instead of
+            // waiting for onKey's async boundary handling to eventually catch up.
+            clearSuggestion()
         }
 
         let typed = unicodeString(from: event)
