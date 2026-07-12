@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import os
 
 /// Experimental word autocomplete. Watches typing with a CGEventTap and suggests completions:
 ///   - In apps that expose it, the focused field's text + caret are read via the Accessibility API.
@@ -7,22 +8,46 @@ import Carbon.HIToolbox
 ///     chip is anchored near the mouse.
 /// A list of candidates is shown near the caret; Up/Down move the selection and Tab inserts it.
 ///
-/// Everything runs on the main thread (the tap source is on the main run loop and deferred work is
-/// dispatched to main), so the synchronous suppression decision and the UI calls stay consistent.
+/// Threading (this matters for input latency): the CGEventTap is an active tap, so the window server
+/// holds every keystroke until the callback returns. To keep typing smooth, the tap runs on its own
+/// dedicated background run-loop thread and the callback does only a cheap suppression decision from a
+/// lock-protected snapshot. All UI and state mutation is dispatched to the main thread; the expensive
+/// Accessibility + spell-checker work runs on a background `work` queue. Nothing heavy ever executes on
+/// the tap thread, so keystrokes are never held.
 final class AutocompleteController {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    /// Dedicated thread whose run loop services the tap, so a busy main thread cannot delay keystrokes.
+    private var tapThread: Thread?
+    private var tapRunLoop: CFRunLoop?
+    private var running = false
+    /// Serial queue for the Accessibility queries and NSSpellChecker calls, off the main thread.
+    private let work = DispatchQueue(label: "com.bindall.autocomplete.work", qos: .userInitiated)
     private let overlay = AutocompleteOverlay()
 
     private var debounce: DispatchWorkItem?
     private var appActivationObserver: NSObjectProtocol?
+
+    /// Minimal state the tap-thread callback reads to decide whether to consume a key. Written on the
+    /// main thread via `syncSuppression()`; read on the tap thread under `suppressionLock`.
+    private struct Suppression {
+        var hasSuggestion = false
+        var selectedIndex = 0
+        var horizontal = false
+        var acceptReturn = true
+    }
+    private var suppression = Suppression()
+    private var suppressionLock = os_unfair_lock()
+
+    /// Bumped on every keystroke and on any reset; a refresh computed on `work` is applied only if the
+    /// generation still matches when it returns to main (otherwise a newer key has superseded it).
+    private var refreshGeneration = 0
 
     // Current suggestion state.
     private var candidates: [String] = []
     private var selectedIndex = 0
     private var partial = ""
     private var lastAnchor = NSPoint.zero
-    private var hasSuggestion: Bool { !candidates.isEmpty }
 
     // Fallback "current word" assembled from keystrokes when AX text is unavailable.
     private var typedBuffer = ""
@@ -51,15 +76,16 @@ final class AutocompleteController {
     /// Marks keystrokes we inject so the tap ignores them.
     private let injectedMarker: Int64 = 0x424E444C // "BNDL"
 
-    var isRunning: Bool { eventTap != nil }
+    var isRunning: Bool { running }
 
     /// Applies user settings.
     func configure(_ config: Config) {
         self.config = config
+        syncSuppression()
     }
 
     func start() {
-        guard eventTap == nil, AccessibilityPermission.isGranted else { return }
+        guard !running, AccessibilityPermission.isGranted else { return }
         let mask = (1 << CGEventType.keyDown.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
@@ -74,8 +100,25 @@ final class AutocompleteController {
         eventTap = tap
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        running = true
+        syncSuppression()
+
+        // Service the tap on its own thread so main-thread work can never delay key delivery. Wait for
+        // the thread to install the source before returning, so tapRunLoop is set for a later stop().
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in
+            let runLoop = CFRunLoopGetCurrent()
+            self?.tapRunLoop = runLoop
+            CFRunLoopAddSource(runLoop, source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            ready.signal()
+            CFRunLoopRun()
+        }
+        thread.name = "com.bindall.autocomplete.tap"
+        thread.qualityOfService = .userInteractive
+        tapThread = thread
+        thread.start()
+        ready.wait()
 
         // Hide the popup the instant focus leaves BindAll's target app, instead of waiting for
         // the next keystroke back in it to notice via appAllowed().
@@ -85,8 +128,15 @@ final class AutocompleteController {
     }
 
     func stop() {
+        guard running else { return }
+        running = false
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        if let runLoop = tapRunLoop, let source = runLoopSource {
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+            CFRunLoopStop(runLoop) // ends CFRunLoopRun so the tap thread exits
+        }
+        tapRunLoop = nil
+        tapThread = nil
         runLoopSource = nil
         eventTap = nil
         if let observer = appActivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
@@ -115,14 +165,17 @@ final class AutocompleteController {
         let modified = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
         let shift = flags.contains(.maskShift)
 
+        // Cheap, lock-protected snapshot of the suggestion state; the real state lives on main.
+        let snap = readSuppression()
+
         // While a suggestion is visible, consume the keys that drive it — but only as bare keys (any
         // modifier, including Shift, passes through, so e.g. Shift+Return still makes a newline).
-        if hasSuggestion, !modified, !shift {
-            let prevKey = config.horizontal ? kVK_LeftArrow : kVK_UpArrow
-            let nextKey = config.horizontal ? kVK_RightArrow : kVK_DownArrow
+        if snap.hasSuggestion, !modified, !shift {
+            let prevKey = snap.horizontal ? kVK_LeftArrow : kVK_UpArrow
+            let nextKey = snap.horizontal ? kVK_RightArrow : kVK_DownArrow
             let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
-            if keyCode == kVK_Tab || (isReturn && config.acceptReturn) {
-                let index = selectedIndex
+            if keyCode == kVK_Tab || (isReturn && snap.acceptReturn) {
+                let index = snap.selectedIndex
                 DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
                 return nil
             }
@@ -138,9 +191,9 @@ final class AutocompleteController {
                 DispatchQueue.main.async { [weak self] in self?.move(1) }
                 return nil
             }
-            // Any other key isn't part of the nav set: close the popup immediately instead of
-            // waiting for onKey's async boundary handling to eventually catch up.
-            clearSuggestion()
+            // Any other key isn't part of the nav set: close the popup (on main; it touches UI) instead
+            // of waiting for onKey's async boundary handling to eventually catch up.
+            DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
         }
 
         let typed = unicodeString(from: event)
@@ -148,7 +201,26 @@ final class AutocompleteController {
         return Unmanaged.passUnretained(event)
     }
 
+    /// Reads the tap-thread suppression snapshot under the lock.
+    private func readSuppression() -> Suppression {
+        os_unfair_lock_lock(&suppressionLock)
+        defer { os_unfair_lock_unlock(&suppressionLock) }
+        return suppression
+    }
+
+    /// Refreshes the tap-thread snapshot from the authoritative main-thread state. Call on main after
+    /// any change to `candidates`, `selectedIndex`, or `config`.
+    private func syncSuppression() {
+        let snap = Suppression(hasSuggestion: !candidates.isEmpty, selectedIndex: selectedIndex,
+                               horizontal: config.horizontal, acceptReturn: config.acceptReturn)
+        os_unfair_lock_lock(&suppressionLock)
+        suppression = snap
+        os_unfair_lock_unlock(&suppressionLock)
+    }
+
     private func onKey(keyCode: Int, typed: String, modified: Bool) {
+        // Every keystroke supersedes any refresh still computing on the work queue.
+        refreshGeneration &+= 1
         if modified { resetWord(); return }
 
         // Space completes the current word: learn it and (optionally) predict the next word.
@@ -200,45 +272,88 @@ final class AutocompleteController {
 
     // MARK: - Suggestion lifecycle
 
+    /// Runs on main (debounced). Snapshots inputs, then does the Accessibility + spell-checker work on
+    /// the `work` queue and applies the result back on main only if no newer keystroke has arrived.
     private func refresh() {
         guard appAllowed() else { resetWord(); return }
-        let anchor: NSPoint
-        switch focusState() {
-        case .secure:
-            resetWord(); return
-        case .text(let info):
-            partial = AutocompleteEngine.partialWord(in: info.text, caretUTF16Offset: info.caret)
-            typedBuffer = partial // keep the fallback buffer in sync with the truth
-            anchor = self.anchor(for: info.element, caret: info.caret)
-        case .unavailable:
-            partial = typedBuffer
-            anchor = mouseAnchor()
+        let gen = refreshGeneration
+        let cfg = config
+        let fallback = typedBuffer
+        let primaryHeight = primaryScreenHeight()
+
+        work.async { [weak self] in
+            guard let self else { return }
+            let resolvedPartial: String
+            let resolvedAnchor: NSPoint
+            switch self.focusState() {
+            case .secure:
+                self.applyOnMain(gen) { $0.resetWord() }
+                return
+            case .text(let info):
+                resolvedPartial = AutocompleteEngine.partialWord(in: info.text, caretUTF16Offset: info.caret)
+                resolvedAnchor = self.anchor(for: info.element, caret: info.caret, primaryHeight: primaryHeight)
+            case .unavailable:
+                resolvedPartial = fallback
+                resolvedAnchor = self.mouseAnchor()
+            }
+
+            guard resolvedPartial.count >= self.minPrefix else {
+                self.applyOnMain(gen) { $0.clearSuggestion() }
+                return
+            }
+            let learned = cfg.learn ? self.store.completions(matching: resolvedPartial, limit: cfg.maxSuggestions) : []
+            let list = AutocompleteEngine.suggestions(for: resolvedPartial, languages: cfg.languages,
+                                                      learned: learned, limit: cfg.maxSuggestions)
+            self.applyOnMain(gen) { me in
+                guard !list.isEmpty else { me.clearSuggestion(); return }
+                me.partial = resolvedPartial
+                me.typedBuffer = resolvedPartial // keep the fallback buffer in sync with the truth
+                me.candidates = list
+                me.selectedIndex = 0
+                me.lastAnchor = resolvedAnchor
+                me.overlay.show(list, selected: 0, horizontal: cfg.horizontal, fontSize: cfg.fontSize,
+                                topLeft: resolvedAnchor)
+                me.syncSuppression()
+            }
         }
-
-        guard partial.count >= minPrefix else { clearSuggestion(); return }
-        let learned = config.learn ? store.completions(matching: partial, limit: config.maxSuggestions) : []
-        let list = AutocompleteEngine.suggestions(for: partial, languages: config.languages,
-                                                  learned: learned, limit: config.maxSuggestions)
-        guard !list.isEmpty else { clearSuggestion(); return }
-
-        candidates = list
-        selectedIndex = 0
-        lastAnchor = anchor
-        overlay.show(list, selected: 0, horizontal: config.horizontal, fontSize: config.fontSize, topLeft: anchor)
     }
 
     /// Suggests the next word (with an empty partial) after a space, from the learned bigrams.
     private func nextWordRefresh() {
         guard appAllowed(), config.nextWord, !prevWord.isEmpty else { clearSuggestion(); return }
-        guard let anchor = currentAnchor() else { clearSuggestion(); return }
-        let words = store.nextWords(prev1: prevWord, prev2: prevWord2.isEmpty ? nil : prevWord2,
-                                    limit: config.maxSuggestions)
-        guard !words.isEmpty else { clearSuggestion(); return }
-        partial = "" // nothing typed yet, so accept just types the word
-        candidates = words
-        selectedIndex = 0
-        lastAnchor = anchor
-        overlay.show(words, selected: 0, horizontal: config.horizontal, fontSize: config.fontSize, topLeft: anchor)
+        let gen = refreshGeneration
+        let cfg = config
+        let p1 = prevWord
+        let p2 = prevWord2
+        let primaryHeight = primaryScreenHeight()
+
+        work.async { [weak self] in
+            guard let self else { return }
+            guard let anchor = self.currentAnchor(primaryHeight: primaryHeight) else {
+                self.applyOnMain(gen) { $0.clearSuggestion() }
+                return
+            }
+            let words = self.store.nextWords(prev1: p1, prev2: p2.isEmpty ? nil : p2, limit: cfg.maxSuggestions)
+            self.applyOnMain(gen) { me in
+                guard !words.isEmpty else { me.clearSuggestion(); return }
+                me.partial = "" // nothing typed yet, so accept just types the word
+                me.candidates = words
+                me.selectedIndex = 0
+                me.lastAnchor = anchor
+                me.overlay.show(words, selected: 0, horizontal: cfg.horizontal, fontSize: cfg.fontSize,
+                                topLeft: anchor)
+                me.syncSuppression()
+            }
+        }
+    }
+
+    /// Applies a work-queue result back on the main thread, but only if `gen` is still current (no
+    /// newer keystroke has superseded this refresh).
+    private func applyOnMain(_ gen: Int, _ body: @escaping (AutocompleteController) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, gen == self.refreshGeneration else { return }
+            body(self)
+        }
     }
 
     private func move(_ delta: Int) {
@@ -246,6 +361,7 @@ final class AutocompleteController {
         selectedIndex = max(0, min(candidates.count - 1, selectedIndex + delta))
         overlay.show(candidates, selected: selectedIndex, horizontal: config.horizontal,
                      fontSize: config.fontSize, topLeft: lastAnchor)
+        syncSuppression()
     }
 
     private func accept(index: Int) {
@@ -268,6 +384,8 @@ final class AutocompleteController {
         candidates = []
         selectedIndex = 0
         overlay.hide()
+        refreshGeneration &+= 1 // drop any in-flight refresh so it cannot re-show the popup
+        syncSuppression()
     }
 
     private func resetWord() {
@@ -288,12 +406,18 @@ final class AutocompleteController {
         }
     }
 
-    private func currentAnchor() -> NSPoint? {
+    private func currentAnchor(primaryHeight: CGFloat?) -> NSPoint? {
         switch focusState() {
         case .secure: return nil
-        case .text(let info): return anchor(for: info.element, caret: info.caret)
+        case .text(let info): return anchor(for: info.element, caret: info.caret, primaryHeight: primaryHeight)
         case .unavailable: return mouseAnchor()
         }
+    }
+
+    /// Height of the primary screen (menu-bar screen), captured on the main thread. NSScreen is not
+    /// safe to touch from the `work` queue, so callers pass this value down into the anchor math.
+    private func primaryScreenHeight() -> CGFloat? {
+        (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?.frame.height
     }
 
     // MARK: - Accessibility
@@ -339,13 +463,14 @@ final class AutocompleteController {
     }
 
     /// Best anchor for the chip: caret rect, else the focused element's frame, else the mouse.
-    private func anchor(for element: AXUIElement, caret: Int) -> NSPoint {
-        caretAnchor(for: element, caret: caret) ?? elementFrameAnchor(for: element) ?? mouseAnchor()
+    private func anchor(for element: AXUIElement, caret: Int, primaryHeight: CGFloat?) -> NSPoint {
+        caretAnchor(for: element, caret: caret, primaryHeight: primaryHeight)
+            ?? elementFrameAnchor(for: element, primaryHeight: primaryHeight) ?? mouseAnchor()
     }
 
     /// Bottom-left of the focused element's frame (many web/Electron fields expose a frame even when
     /// they do not expose a caret rect). Quartz top-left origin -> AppKit bottom-left.
-    private func elementFrameAnchor(for element: AXUIElement) -> NSPoint? {
+    private func elementFrameAnchor(for element: AXUIElement, primaryHeight: CGFloat?) -> NSPoint? {
         var posRef: AnyObject?
         var sizeRef: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
@@ -355,13 +480,12 @@ final class AutocompleteController {
         guard AXValueGetValue(posRef as! AXValue, .cgPoint, &pos),
               AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
               size.width > 0, size.height > 0 else { return nil }
-        let primaryHeight = (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?
-            .frame.height ?? (pos.y + size.height)
-        return NSPoint(x: pos.x + 6, y: primaryHeight - (pos.y + size.height) + 6)
+        let base = primaryHeight ?? (pos.y + size.height)
+        return NSPoint(x: pos.x + 6, y: base - (pos.y + size.height) + 6)
     }
 
     /// AppKit screen point just below the caret, derived from the AX caret rect (Quartz, top-left).
-    private func caretAnchor(for element: AXUIElement, caret: Int) -> NSPoint? {
+    private func caretAnchor(for element: AXUIElement, caret: Int, primaryHeight: CGFloat?) -> NSPoint? {
         var cfRange = CFRange(location: max(0, caret - 1), length: 1)
         guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return nil }
         var boundsRef: AnyObject?
@@ -369,9 +493,8 @@ final class AutocompleteController {
                                                          rangeValue, &boundsRef) == .success else { return nil }
         var rect = CGRect.zero
         guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect), rect.width > 0 || rect.height > 0 else { return nil }
-        let primaryHeight = (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?
-            .frame.height ?? rect.maxY
-        return NSPoint(x: rect.minX, y: primaryHeight - rect.maxY)
+        let base = primaryHeight ?? rect.maxY
+        return NSPoint(x: rect.minX, y: base - rect.maxY)
     }
 
     private func mouseAnchor() -> NSPoint {

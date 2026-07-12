@@ -36,8 +36,8 @@ BindAll/
 │   └── OCRService.swift        # screencapture region + Vision text recognition
 ├── Autocomplete/               # experimental: word completion while typing (off by default)
 │   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word
-│   ├── AutocompleteController.swift   # CGEventTap + AX/keystroke word; suggestions, next-word, accept
-│   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed
+│   ├── AutocompleteController.swift   # CGEventTap (own thread) + AX/keystroke word; suggestions, next-word, accept
+│   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed (thread-safe)
 │   ├── ru_bigrams.txt                 # bundled Russian bigram seed (Google Books, CC BY 3.0)
 │   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
 ├── Actions/
@@ -76,6 +76,10 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   words you use (local `AutocompleteLearningStore`). Configurable: count, column/line layout, text
   size, dictionary language, and per-app allow/deny. Uses AX text+caret where available, otherwise a
   keystroke buffer (works in most apps). Skipped in password fields and BindAll's own windows.
+  Its tap is an active tap (it consumes Tab/arrows while suggesting), so it runs on a **dedicated
+  run-loop thread** and the callback only makes a cheap lock-protected suppression decision; all AX
+  and NSSpellChecker work happens on a background queue. Do not move the tap back to the main run
+  loop or do AX/spell-checker work in the callback -- that reintroduces per-keystroke input lag.
 
 Because the Cmd+C triggers are the real copy shortcut, the selection is already on the pasteboard when
 a burst fires; the event tap is **listen-only** and does not consume the keystroke. Per-action-key
