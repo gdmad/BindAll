@@ -1,7 +1,7 @@
 import AppKit
 
 /// Word suggestions backed by the system spell checker (`NSSpellChecker`), plus a pure helper for
-/// extracting the word currently being typed. Used by the experimental autocomplete feature.
+/// extracting the word currently being typed. Used by the autocomplete feature.
 enum AutocompleteEngine {
     /// The word being typed immediately to the left of the caret. Letters only; empty when the caret
     /// sits at a non-letter boundary (so nothing is suggested right after a space or punctuation).

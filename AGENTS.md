@@ -34,9 +34,9 @@ BindAll/
 │   ├── LanguageToolEngine.swift      # LanguageTool grammar/spell correction (the "Correct" action)
 │   ├── TranslationService.swift      # Apple Translation framework + NL language detection
 │   └── OCRService.swift        # screencapture region + Vision text recognition
-├── Autocomplete/               # experimental: word completion while typing (off by default)
+├── Autocomplete/               # word completion while typing (off by default)
 │   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word
-│   ├── AutocompleteController.swift   # CGEventTap (own thread) + AX/keystroke word; suggestions, next-word, accept
+│   ├── AutocompleteController.swift   # two CGEventTaps on own thread (listen-only monitor + active suppressor); AX/keystroke word; suggestions, next-word, accept
 │   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed (thread-safe)
 │   ├── ru_bigrams.txt                 # bundled Russian bigram seed (Google Books, CC BY 3.0)
 │   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
@@ -70,7 +70,7 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Shift+Cmd+C** → Correct (LanguageTool), only when enabled in Settings → General.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
-- **Word autocomplete** (experimental, off by default; enable on General, configure on the Autocomplete
+- **Word autocomplete** (off by default; enable on General, configure on the Autocomplete
   tab): as you type, a list of case-matched completions appears near the caret; arrow keys choose,
   **Tab** (and optionally Return) inserts. It can predict the next word after a space and learn the
   words you use (local `AutocompleteLearningStore`). Configurable: count, column/line layout, text

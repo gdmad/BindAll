@@ -2,22 +2,34 @@ import AppKit
 import Carbon.HIToolbox
 import os
 
-/// Experimental word autocomplete. Watches typing with a CGEventTap and suggests completions:
+/// Word autocomplete. Watches typing with a CGEventTap and suggests completions:
 ///   - In apps that expose it, the focused field's text + caret are read via the Accessibility API.
 ///   - Elsewhere (Electron/web), the current word is assembled from the observed keystrokes and the
 ///     chip is anchored near the mouse.
 /// A list of candidates is shown near the caret; Up/Down move the selection and Tab inserts it.
 ///
-/// Threading (this matters for input latency): the CGEventTap is an active tap, so the window server
-/// holds every keystroke until the callback returns. To keep typing smooth, the tap runs on its own
-/// dedicated background run-loop thread and the callback does only a cheap suppression decision from a
-/// lock-protected snapshot. All UI and state mutation is dispatched to the main thread; the expensive
-/// Accessibility + spell-checker work runs on a background `work` queue. Nothing heavy ever executes on
-/// the tap thread, so keystrokes are never held.
+/// Threading & latency: an active CGEventTap makes the window server hold every keystroke until the
+/// callback returns, which is system-wide input lag. So we run TWO taps on a dedicated background
+/// run-loop thread:
+///   - `monitorTap` (`.listenOnly`, always on): a passive observer the window server does NOT wait on,
+///     so it never delays input. It does the per-key work (unicode decode, word building) and
+///     dispatches everything to main.
+///   - `suppressTap` (`.defaultTap`, active): enabled ONLY while a suggestion is visible. It consumes
+///     the keys that drive the popup (Tab/Return/arrows/Escape) and passes everything else through.
+///     While no suggestion is showing it is disabled, so ordinary typing pays no active-tap cost.
+/// Created monitor-first, suppressor-second, so the suppressor sits at the head of the tap chain and
+/// gets consumable keys before the monitor. All UI/state mutation is on main; the expensive
+/// Accessibility + spell-checker work runs on a background `work` queue.
 final class AutocompleteController {
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    /// Dedicated thread whose run loop services the tap, so a busy main thread cannot delay keystrokes.
+    /// Passive observer; never blocks input. Handles ordinary per-key work.
+    private var monitorTap: CFMachPort?
+    private var monitorSource: CFRunLoopSource?
+    /// Active tap that consumes popup-navigation keys; enabled only while a suggestion is visible.
+    private var suppressTap: CFMachPort?
+    private var suppressSource: CFRunLoopSource?
+    /// Tracks the suppressor's enabled state so we only toggle it when `hasSuggestion` actually flips.
+    private var suppressorEnabled = false
+    /// Dedicated thread whose run loop services the taps, so a busy main thread cannot delay keystrokes.
     private var tapThread: Thread?
     private var tapRunLoop: CFRunLoop?
     private var running = false
@@ -87,30 +99,49 @@ final class AutocompleteController {
     func start() {
         guard !running, AccessibilityPermission.isGranted else { return }
         let mask = (1 << CGEventType.keyDown.rawValue)
-        let callback: CGEventTapCallBack = { _, type, event, refcon in
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+
+        // Passive monitor: the window server does not wait on a listen-only tap, so it adds no input lag.
+        let monitorCallback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
             let controller = Unmanaged<AutocompleteController>.fromOpaque(refcon).takeUnretainedValue()
-            return controller.handle(type: type, event: event)
+            return controller.handleMonitor(type: type, event: event)
         }
-        // Not listen-only: the tap must be able to suppress Tab / arrows while a suggestion is showing.
-        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
-                                          options: .defaultTap, eventsOfInterest: CGEventMask(mask),
-                                          callback: callback,
-                                          userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return }
-        eventTap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
+        guard let monitor = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+                                              options: .listenOnly, eventsOfInterest: CGEventMask(mask),
+                                              callback: monitorCallback, userInfo: userInfo) else { return }
+
+        // Active suppressor: consumes popup-navigation keys. Created after the monitor so it sits at the
+        // head of the chain and sees consumable keys first. Enabled only while a suggestion is visible.
+        let suppressCallback: CGEventTapCallBack = { _, type, event, refcon in
+            guard let refcon else { return Unmanaged.passUnretained(event) }
+            let controller = Unmanaged<AutocompleteController>.fromOpaque(refcon).takeUnretainedValue()
+            return controller.handleSuppress(type: type, event: event)
+        }
+        guard let suppress = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+                                               options: .defaultTap, eventsOfInterest: CGEventMask(mask),
+                                               callback: suppressCallback, userInfo: userInfo) else { return }
+
+        monitorTap = monitor
+        suppressTap = suppress
+        let monitorSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, monitor, 0)
+        let suppressSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, suppress, 0)
+        monitorSource = monitorSrc
+        suppressSource = suppressSrc
+        suppressorEnabled = false
         running = true
         syncSuppression()
 
-        // Service the tap on its own thread so main-thread work can never delay key delivery. Wait for
-        // the thread to install the source before returning, so tapRunLoop is set for a later stop().
+        // Service the taps on their own thread so main-thread work can never delay key delivery. Wait for
+        // the thread to install the sources before returning, so tapRunLoop is set for a later stop().
         let ready = DispatchSemaphore(value: 0)
         let thread = Thread { [weak self] in
             let runLoop = CFRunLoopGetCurrent()
             self?.tapRunLoop = runLoop
-            CFRunLoopAddSource(runLoop, source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
+            CFRunLoopAddSource(runLoop, monitorSrc, .commonModes)
+            CFRunLoopAddSource(runLoop, suppressSrc, .commonModes)
+            CGEvent.tapEnable(tap: monitor, enable: true)
+            CGEvent.tapEnable(tap: suppress, enable: false) // stays off until a suggestion appears
             ready.signal()
             CFRunLoopRun()
         }
@@ -130,15 +161,20 @@ final class AutocompleteController {
     func stop() {
         guard running else { return }
         running = false
-        if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let runLoop = tapRunLoop, let source = runLoopSource {
-            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+        if let tap = monitorTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let tap = suppressTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let runLoop = tapRunLoop {
+            if let source = monitorSource { CFRunLoopRemoveSource(runLoop, source, .commonModes) }
+            if let source = suppressSource { CFRunLoopRemoveSource(runLoop, source, .commonModes) }
             CFRunLoopStop(runLoop) // ends CFRunLoopRun so the tap thread exits
         }
         tapRunLoop = nil
         tapThread = nil
-        runLoopSource = nil
-        eventTap = nil
+        monitorSource = nil
+        suppressSource = nil
+        monitorTap = nil
+        suppressTap = nil
+        suppressorEnabled = false
         if let observer = appActivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         appActivationObserver = nil
         debounce?.cancel()
@@ -148,9 +184,11 @@ final class AutocompleteController {
 
     // MARK: - Event handling
 
-    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    /// Passive monitor callback (listen-only). Never blocks input: does the per-key unicode decode and
+    /// dispatches word-building to main. Keys consumed by the suppressor never reach here.
+    private func handleMonitor(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap = monitorTap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
@@ -163,41 +201,60 @@ final class AutocompleteController {
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
         let modified = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
+        let typed = unicodeString(from: event)
+        DispatchQueue.main.async { [weak self] in self?.onKey(keyCode: keyCode, typed: typed, modified: modified) }
+        return Unmanaged.passUnretained(event) // ignored for a listen-only tap
+    }
+
+    /// Active suppressor callback. Enabled only while a suggestion is visible. Consumes the keys that
+    /// drive the popup and passes everything else through untouched. Kept minimal so the brief window
+    /// it is active adds as little latency as possible.
+    private func handleSuppress(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            // Re-arm only if it should currently be active; otherwise leave it off.
+            if suppressorEnabled, let tap = suppressTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+        if event.getIntegerValueField(.eventSourceUserData) == injectedMarker {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+        let modified = flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate)
         let shift = flags.contains(.maskShift)
 
         // Cheap, lock-protected snapshot of the suggestion state; the real state lives on main.
         let snap = readSuppression()
+        guard snap.hasSuggestion, !modified, !shift else { return Unmanaged.passUnretained(event) }
 
-        // While a suggestion is visible, consume the keys that drive it — but only as bare keys (any
-        // modifier, including Shift, passes through, so e.g. Shift+Return still makes a newline).
-        if snap.hasSuggestion, !modified, !shift {
-            let prevKey = snap.horizontal ? kVK_LeftArrow : kVK_UpArrow
-            let nextKey = snap.horizontal ? kVK_RightArrow : kVK_DownArrow
-            let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
-            if keyCode == kVK_Tab || (isReturn && snap.acceptReturn) {
-                let index = snap.selectedIndex
-                DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
-                return nil
-            }
-            if keyCode == kVK_Escape {
-                DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
-                return nil
-            }
-            if keyCode == prevKey {
-                DispatchQueue.main.async { [weak self] in self?.move(-1) }
-                return nil
-            }
-            if keyCode == nextKey {
-                DispatchQueue.main.async { [weak self] in self?.move(1) }
-                return nil
-            }
-            // Any other key isn't part of the nav set: close the popup (on main; it touches UI) instead
-            // of waiting for onKey's async boundary handling to eventually catch up.
-            DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
+        // Consume the keys that drive the popup — only as bare keys (any modifier, including Shift,
+        // passes through, so e.g. Shift+Return still makes a newline).
+        let prevKey = snap.horizontal ? kVK_LeftArrow : kVK_UpArrow
+        let nextKey = snap.horizontal ? kVK_RightArrow : kVK_DownArrow
+        let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
+        if keyCode == kVK_Tab || (isReturn && snap.acceptReturn) {
+            let index = snap.selectedIndex
+            DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
+            return nil
         }
-
-        let typed = unicodeString(from: event)
-        DispatchQueue.main.async { [weak self] in self?.onKey(keyCode: keyCode, typed: typed, modified: modified) }
+        if keyCode == kVK_Escape {
+            DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
+            return nil
+        }
+        if keyCode == prevKey {
+            DispatchQueue.main.async { [weak self] in self?.move(-1) }
+            return nil
+        }
+        if keyCode == nextKey {
+            DispatchQueue.main.async { [weak self] in self?.move(1) }
+            return nil
+        }
+        // Any other key isn't part of the nav set: close the popup now (it touches UI, so on main)
+        // instead of waiting for the monitor's onKey boundary handling to catch up, but let the key
+        // through so it still reaches the field (and the monitor, which builds the next word).
+        DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
         return Unmanaged.passUnretained(event)
     }
 
@@ -208,14 +265,23 @@ final class AutocompleteController {
         return suppression
     }
 
-    /// Refreshes the tap-thread snapshot from the authoritative main-thread state. Call on main after
-    /// any change to `candidates`, `selectedIndex`, or `config`.
+    /// Refreshes the tap-thread snapshot from the authoritative main-thread state, and enables the
+    /// active suppressor tap exactly while a suggestion is visible. Call on main after any change to
+    /// `candidates`, `selectedIndex`, or `config`.
     private func syncSuppression() {
-        let snap = Suppression(hasSuggestion: !candidates.isEmpty, selectedIndex: selectedIndex,
+        let hasSuggestion = !candidates.isEmpty
+        let snap = Suppression(hasSuggestion: hasSuggestion, selectedIndex: selectedIndex,
                                horizontal: config.horizontal, acceptReturn: config.acceptReturn)
         os_unfair_lock_lock(&suppressionLock)
         suppression = snap
         os_unfair_lock_unlock(&suppressionLock)
+
+        // Toggle the active tap only on an actual transition, so ordinary typing pays no active-tap cost.
+        // CGEventTapEnable is safe to call from any thread.
+        if hasSuggestion != suppressorEnabled, let tap = suppressTap {
+            suppressorEnabled = hasSuggestion
+            CGEvent.tapEnable(tap: tap, enable: hasSuggestion)
+        }
     }
 
     private func onKey(keyCode: Int, typed: String, modified: Bool) {

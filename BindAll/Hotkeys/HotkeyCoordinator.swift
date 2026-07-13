@@ -63,7 +63,7 @@ final class HotkeyCoordinator: ObservableObject {
         }
     }
 
-    /// Starts or stops the experimental autocomplete depending on the setting and Accessibility.
+    /// Starts or stops autocomplete depending on the setting and Accessibility.
     private func updateAutocomplete() {
         let s = appState.settings
         var cfg = AutocompleteController.Config()

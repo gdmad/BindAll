@@ -47,7 +47,7 @@ No Dock icon: BindAll lives in the menu bar (`LSUIElement`).
   pick a model, Test connection. OpenRouter has a "free models only" filter.
 - **History** — the last results are kept locally and reachable from the menu bar (click to copy).
 - **Mask AI Slop** — optional: normalize em/en dashes, smart quotes/apostrophes, strip emoji.
-- **Word autocomplete** *(experimental, off by default)* — as you type, a list of case-matched
+- **Word autocomplete** *(off by default)* — as you type, a list of case-matched
   completions appears near the caret; arrow keys move the selection, **Tab** (and optionally Return)
   inserts. Also predicts the next word after a space and learns the words you use, locally. Configure
   count, layout, text size, dictionary language, and per-app allow/deny on the Autocomplete tab.

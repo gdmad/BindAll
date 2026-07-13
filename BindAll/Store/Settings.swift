@@ -115,7 +115,7 @@ struct Settings: Codable, Equatable {
     // Text post-processing
     var maskAISlop: Bool = false
 
-    // Experimental: suggest a completion for the word being typed, accept with Tab.
+    // Suggest a completion for the word being typed, accept with Tab.
     var autocompleteEnabled: Bool = false
     var autocompleteCount: Int = 5            // how many suggestions to show (1...9)
     var autocompleteHorizontal: Bool = false  // false = column (Up/Down), true = line (Left/Right)
