@@ -142,6 +142,168 @@ check(!AutocompleteEngine.isWordTerminator("-"), "hyphen is inside a compound wo
 check(!AutocompleteEngine.isWordTerminator("5"), "digit is inside a token")
 check(!AutocompleteEngine.isWordTerminator("a"), "letter is not a boundary")
 
+// MARK: - Proofread
+
+func issue(_ location: Int, _ length: Int, source: IssueSource = .spellChecker,
+           kind: IssueKind = .spelling, original: String = "x",
+           replacements: [String] = [], ruleId: String? = nil) -> TextIssue {
+    TextIssue(range: NSRange(location: location, length: length), kind: kind, shortMessage: "",
+              message: "", replacements: replacements, ruleId: ruleId, source: source, original: original)
+}
+
+print("LanguageToolEngine.parseMatches")
+let ltJSON = """
+{"matches": [
+  {"offset": 5, "length": 3, "message": "Spelling mistake", "shortMessage": "Spelling",
+   "replacements": [{"value": "the"}, {"value": "thee"}],
+   "rule": {"id": "MORFOLOGIK_RULE", "issueType": "misspelling", "category": {"id": "TYPOS"}}},
+  {"offset": 20, "length": 2, "message": "No replacement offered", "replacements": [],
+   "rule": {"id": "STYLE_X", "issueType": "style", "category": {"id": "STYLE"}}},
+  {"offset": -1, "length": 4, "message": "malformed"},
+  {"length": 4, "message": "no offset"}
+]}
+"""
+let ltMatches = try! LanguageToolEngine.parseMatches(Data(ltJSON.utf8))
+check(ltMatches.count == 2, "malformed matches are dropped (got \(ltMatches.count))")
+check(ltMatches[0].replacements == ["the", "thee"], "replacements parsed in order")
+eq(ltMatches[0].ruleId ?? "", "MORFOLOGIK_RULE", "rule id parsed")
+eq(ltMatches[0].categoryId ?? "", "TYPOS", "category id parsed")
+eq(ltMatches[0].shortMessage, "Spelling", "short message parsed")
+check(ltMatches[1].replacements.isEmpty, "match without replacements is kept")
+
+print("LanguageToolEngine.kind")
+check(LanguageToolEngine.kind(for: ltMatches[0]) == .spelling, "TYPOS category → spelling")
+check(LanguageToolEngine.kind(for: ltMatches[1]) == .style, "style issueType → style")
+check(LanguageToolEngine.kind(for: LTMatch(offset: 0, length: 1, message: "", shortMessage: "",
+                                           replacements: [], ruleId: nil, issueType: "whitespace",
+                                           categoryId: "TYPOGRAPHY")) == .punctuation,
+      "whitespace issueType → punctuation")
+check(LanguageToolEngine.kind(for: LTMatch(offset: 0, length: 1, message: "", shortMessage: "",
+                                           replacements: [], ruleId: nil, issueType: nil,
+                                           categoryId: nil)) == .grammar,
+      "unknown issueType → grammar")
+
+print("LanguageToolEngine.issues offsets are UTF-16")
+// The emoji is 2 UTF-16 units, so "bad" starts at 3, not 2. LanguageTool counts the same way.
+let emojiText = "a😉bad end"
+let emojiIssues = LanguageToolEngine.issues(
+    from: [LTMatch(offset: 3, length: 3, message: "m", shortMessage: "s", replacements: ["good"],
+                   ruleId: "R", issueType: "misspelling", categoryId: "TYPOS")],
+    text: emojiText)
+check(emojiIssues.count == 1, "issue inside text is kept")
+eq(emojiIssues[0].original, "bad", "UTF-16 offset past an emoji resolves to the right substring")
+let outOfRange = LanguageToolEngine.issues(
+    from: [LTMatch(offset: 100, length: 3, message: "", shortMessage: "", replacements: [],
+                   ruleId: nil, issueType: nil, categoryId: nil)],
+    text: emojiText)
+check(outOfRange.isEmpty, "issue past the end of text is dropped")
+
+print("TextIssue identity")
+let idA = issue(5, 3, original: "teh").id
+let idB = issue(5, 3, original: "teh").id
+eq(idA, idB, "same issue re-checked yields the same id")
+check(idA != issue(6, 3, original: "teh").id, "different location yields a different id")
+
+print("IssueMerger.merge")
+let ltSpell = issue(0, 3, source: .languageTool, original: "teh", replacements: ["the"], ruleId: "LT")
+let spSpell = issue(0, 3, source: .spellChecker, original: "teh", replacements: ["the", "tech"])
+let sameRange = IssueMerger.merge([[spSpell], [ltSpell]])
+check(sameRange.count == 1, "identical ranges collapse to one issue")
+check(sameRange[0].source == .languageTool, "LanguageTool wins over the spell checker")
+check(sameRange[0].replacements == ["the", "tech"], "replacements are unioned, deduped, winner first")
+
+let overlap = IssueMerger.merge([[issue(0, 5, source: .languageTool, original: "a b c")], [issue(2, 3)]])
+check(overlap.count == 1 && overlap[0].range.length == 5, "overlapping issue loses to the longer one")
+
+let disjoint = IssueMerger.merge([[issue(10, 2, original: "aa")], [issue(0, 2, original: "bb")]])
+check(disjoint.count == 2, "disjoint issues both survive")
+check(disjoint[0].range.location == 0, "merge output is sorted by location")
+
+let ignored = IssueMerger.merge([[issue(0, 4, original: "Swift")]], ignoring: ["swift"])
+check(ignored.isEmpty, "ignored words are dropped case-insensitively")
+check(IssueMerger.merge([[issue(0, 0, original: "")]]).isEmpty, "empty ranges are dropped")
+
+print("IssueMerger.shift")
+let base = [issue(0, 3, original: "aaa"), issue(10, 4, original: "bbbb"), issue(20, 2, original: "cc")]
+let longer = IssueMerger.shift(base, replacedRange: NSRange(location: 10, length: 4), replacementUTF16Length: 6)
+check(longer.count == 2, "the applied issue itself is dropped")
+check(longer[0].range.location == 0, "issue before the edit does not move")
+check(longer[1].range.location == 22, "issue after a longer replacement slides right")
+let shorter = IssueMerger.shift(base, replacedRange: NSRange(location: 10, length: 4), replacementUTF16Length: 1)
+check(shorter[1].range.location == 17, "issue after a shorter replacement slides left")
+let same = IssueMerger.shift(base, replacedRange: NSRange(location: 10, length: 4), replacementUTF16Length: 4)
+check(same[1].range.location == 20, "equal-length replacement leaves later issues alone")
+let atEnd = IssueMerger.shift(base, replacedRange: NSRange(location: 20, length: 2), replacementUTF16Length: 5)
+check(atEnd.count == 2 && atEnd.last?.range.location == 10, "replacing the last issue keeps the earlier ones")
+let touching = IssueMerger.shift([issue(0, 3, original: "aaa")],
+                                 replacedRange: NSRange(location: 3, length: 2), replacementUTF16Length: 9)
+check(touching.count == 1, "an issue ending exactly where the edit starts survives")
+
+print("IssueMerger.excludingCaretWord")
+let caretIssues = [issue(0, 4, original: "typo"), issue(10, 4, original: "word")]
+check(IssueMerger.excludingCaretWord(caretIssues, caret: 2).count == 1, "issue under the caret is hidden")
+check(IssueMerger.excludingCaretWord(caretIssues, caret: 4).count == 1, "caret at the word end still hides it")
+check(IssueMerger.excludingCaretWord(caretIssues, caret: 7).count == 2, "caret elsewhere hides nothing")
+
+print("TextSegmenter.paragraphs")
+func tiles(_ ps: [Paragraph], _ text: String) -> Bool {
+    var next = 0
+    for p in ps {
+        if p.range.location != next { return false }
+        next = NSMaxRange(p.range)
+    }
+    return next == (text as NSString).length
+}
+let lfText = "one\ntwo\nthree"
+let lf = TextSegmenter.paragraphs(of: lfText)
+check(lf.count == 3, "LF splits into three paragraphs")
+eq(lf[0].text, "one\n", "separator stays with its paragraph")
+eq(lf[2].text, "three", "last paragraph without a trailing separator")
+check(tiles(lf, lfText), "LF paragraphs tile the text with no gaps")
+
+let crlfText = "one\r\ntwo"
+let crlf = TextSegmenter.paragraphs(of: crlfText)
+check(crlf.count == 2, "CRLF counts as one separator")
+eq(crlf[0].text, "one\r\n", "CRLF stays with its paragraph")
+check(tiles(crlf, crlfText), "CRLF paragraphs tile the text")
+
+let blankText = "one\n\nthree"
+let blank = TextSegmenter.paragraphs(of: blankText)
+check(blank.count == 3, "a blank line is its own paragraph")
+check(tiles(blank, blankText), "paragraphs around a blank line tile the text")
+check(TextSegmenter.paragraphs(of: "").isEmpty, "empty text has no paragraphs")
+check(!TextSegmenter.isCheckable(Paragraph(range: NSRange(location: 0, length: 1), text: "\n")),
+      "a blank paragraph is not worth checking")
+
+print("ProofreadCache")
+let cache = ProofreadCache()
+let para = Paragraph(range: NSRange(location: 7, length: 5), text: "hello")
+check(cache.issues(for: para) == nil, "cache starts empty")
+cache.store([issue(1, 2, original: "el")], for: para)
+check(cache.issues(for: para)?.count == 1, "stored issues are found by paragraph text")
+let rebased = ProofreadCache.rebase(cache.issues(for: para)!, to: para.range.location)
+check(rebased[0].range.location == 8, "rebase moves paragraph-local ranges into document coordinates")
+eq(rebased[0].original, "el", "rebase preserves the issue payload")
+cache.prune(keeping: [Paragraph(range: NSRange(location: 0, length: 5), text: "other")])
+check(cache.count == 0, "prune forgets paragraphs no longer in the document")
+
+print("ProofreadLanguage")
+eq(ProofreadLanguage.resolve(text: "x", setting: "en-US", detected: "ru"), "en-US",
+   "an explicit setting overrides detection")
+eq(ProofreadLanguage.resolve(text: "x", setting: "auto", detected: nil), "ru",
+   "auto with no detection uses the fallback")
+eq(ProofreadLanguage.resolve(text: "hello there", setting: "auto", detected: "en"), "en",
+   "auto uses the detected language")
+eq(ProofreadLanguage.disambiguateCyrillic("привет как дела", candidate: "uk", preferred: "ru"), "ru",
+   "Russian text misdetected as Ukrainian falls back to Russian")
+eq(ProofreadLanguage.disambiguateCyrillic("привіт як справи", candidate: "uk", preferred: "ru"), "uk",
+   "real Ukrainian keeps its detected language")
+eq(ProofreadLanguage.disambiguateCyrillic("hello", candidate: "en", preferred: "ru"), "en",
+   "non-Cyrillic detection is left alone")
+eq(ProofreadLanguage.baseCode("en-US"), "en", "baseCode strips the region")
+check(ProofreadLanguage.spellCheckerSupportsGrammar("en-GB"), "NSSpellChecker has English grammar")
+check(!ProofreadLanguage.spellCheckerSupportsGrammar("ru"), "NSSpellChecker has no Russian grammar")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")

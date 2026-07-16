@@ -11,6 +11,10 @@ swiftc -O \
     BindAll/Actions/MaskAISlop.swift \
     BindAll/Store/HistoryStore.swift \
     BindAll/Engines/AIEngine.swift \
+    BindAll/Proofread/TextIssue.swift \
+    BindAll/Proofread/IssueMerger.swift \
+    BindAll/Proofread/ProofreadCache.swift \
+    BindAll/Proofread/ProofreadLanguage.swift \
     BindAll/Engines/LanguageToolEngine.swift \
     BindAll/Autocomplete/AutocompleteEngine.swift \
     Tests/main.swift \
