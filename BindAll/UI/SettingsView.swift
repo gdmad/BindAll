@@ -17,6 +17,9 @@ struct SettingsView: View {
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
             AutocompleteSettingsView()
                 .tabItem { Label("Autocomplete", systemImage: "text.append") }
+
+            ProofreadSettingsView()
+                .tabItem { Label("Proofread", systemImage: "text.magnifyingglass") }
         }
         .padding(.top, 8)
         .frame(minWidth: 520, idealWidth: 560, minHeight: 478, idealHeight: 558)
@@ -82,10 +85,10 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.correctEnabled) {
-                    helpHeader("Enable Correct", "Adds a separate shortcut that fixes grammar and spelling in the selection with a LanguageTool server. Set its shortcut in Shortcuts and the server in Providers. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
+                    helpHeader("Enable Proofread", "Adds a shortcut that checks the focused text field with a LanguageTool server and walks you through the issues one at a time: the word is selected in place and a list of fixes appears under it (arrows choose, Return applies, Tab skips, Esc exits). Set the shortcut in Shortcuts, the server in Providers, and the rest on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
                 }
             } header: {
-                Text("Correct (LanguageTool)")
+                Text("Proofread (LanguageTool)")
             }
 
             Section {
@@ -95,6 +98,7 @@ struct GeneralSettingsView: View {
             } header: {
                 Text("Autocomplete")
             }
+
 
             Section("Output") {
                 Toggle(isOn: $appState.settings.restoreClipboard) {
@@ -276,27 +280,27 @@ struct HotkeysSettingsView: View {
     var body: some View {
         let s = appState.settings
         let keyShortcuts = s.actionKeys.compactMap(\.hotkey)
-        let correct: [HotkeyConfig] = s.correctEnabled ? [s.correctHotkey] : []
+        let optional: [HotkeyConfig] = s.correctEnabled ? [s.correctHotkey] : []
         Form {
             Section {
                 LabeledContent("Default action") {
                     ShortcutRecorder(config: $appState.settings.defaultActionHotkey,
-                                     others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
+                                     others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + optional + keyShortcuts)
                 }
                 LabeledContent("Translate selection") {
                     ShortcutRecorder(config: $appState.settings.translateHotkey,
-                                     others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
+                                     others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + optional + keyShortcuts)
                 }
                 LabeledContent("Translate from screen (OCR)") {
                     ShortcutRecorder(config: $appState.settings.screenTranslateHotkey,
-                                     others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
+                                     others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + optional + keyShortcuts)
                 }
                 LabeledContent("Quick Translate") {
                     ShortcutRecorder(config: $appState.settings.quickTranslateHotkey,
-                                     others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + correct + keyShortcuts)
+                                     others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + optional + keyShortcuts)
                 }
                 if s.correctEnabled {
-                    LabeledContent("Correct (LanguageTool)") {
+                    LabeledContent("Proofread (LanguageTool)") {
                         ShortcutRecorder(config: $appState.settings.correctHotkey,
                                          others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
                     }

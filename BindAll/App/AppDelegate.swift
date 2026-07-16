@@ -130,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             ("Quick Translate", HotkeyFormatter.string(s.quickTranslateHotkey), #selector(menuQuickTranslate)),
         ]
         if s.correctEnabled {
-            actions.append(("Correct (LanguageTool)", HotkeyFormatter.string(s.correctHotkey), #selector(menuCorrect)))
+            actions.append(("Proofread (LanguageTool)", HotkeyFormatter.string(s.correctHotkey), #selector(menuProofread)))
         }
 
         // Column = widest "title + gap + shortcut" across every shortcut-bearing item.
@@ -253,7 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func menuTranslate() { coordinator.menuTranslate() }
     @objc private func menuScreenTranslate() { coordinator.menuScreenTranslate() }
     @objc private func menuQuickTranslate() { coordinator.menuQuickTranslate() }
-    @objc private func menuCorrect() { coordinator.menuCorrect() }
+    @objc private func menuProofread() { coordinator.menuProofread() }
 }
 
 /// A window that closes on Esc (cancelOperation), used for the Settings window.

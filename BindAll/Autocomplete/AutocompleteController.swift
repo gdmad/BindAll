@@ -89,12 +89,28 @@ final class AutocompleteController {
     /// Marks keystrokes we inject so the tap ignores them.
     private let injectedMarker: Int64 = 0x424E444C // "BNDL"
 
+    /// Set while another feature owns the keyboard (a proofread popup is up). Both consume Tab, so
+    /// only one may be suggesting at a time.
+    private var suspended = false
+
     var isRunning: Bool { running }
 
     /// Applies user settings.
     func configure(_ config: Config) {
         self.config = config
         syncSuppression()
+    }
+
+    /// Hides any suggestion and stops making new ones until `resume()`.
+    func suspend() {
+        guard !suspended else { return }
+        suspended = true
+        debounce?.cancel()
+        resetWord()
+    }
+
+    func resume() {
+        suspended = false
     }
 
     func start() {
@@ -305,6 +321,7 @@ final class AutocompleteController {
     private func onKey(keyCode: Int, typed: String, modified: Bool) {
         // Every keystroke supersedes any refresh still computing on the work queue.
         refreshGeneration &+= 1
+        if suspended { return }
         if modified { resetWord(); return }
 
         // Space completes the current word: learn it and (optionally) predict the next word.

@@ -39,10 +39,4 @@ enum ProofreadLanguage {
     static func baseCode(_ code: String) -> String {
         String(code.split(separator: "-").first ?? Substring(code)).lowercased()
     }
-
-    /// NSSpellChecker only ships grammar rules for English and Spanish; asking for `.grammar` in any
-    /// other language is a wasted pass that returns nothing.
-    static func spellCheckerSupportsGrammar(_ code: String) -> Bool {
-        ["en", "es"].contains(baseCode(code))
-    }
 }

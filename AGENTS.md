@@ -31,7 +31,8 @@ BindAll/
 │   ├── AIEngine.swift          # protocol + EngineError
 │   ├── AppleFoundationEngine.swift   # FoundationModels on-device LLM (temperature 0)
 │   ├── OpenAICompatibleEngine.swift  # DeepSeek / OpenRouter / OpenAI / Ollama (one client)
-│   ├── LanguageToolEngine.swift      # LanguageTool grammar/spell correction (the "Correct" action)
+│   ├── LanguageToolEngine.swift      # LanguageTool client: correct() applies all fixes;
+│   │                                 # check()/parseMatches()/issues() feed Proofread
 │   ├── TranslationService.swift      # Apple Translation framework + NL language detection
 │   └── OCRService.swift        # screencapture region + Vision text recognition
 ├── Autocomplete/               # word completion while typing (off by default)
@@ -40,6 +41,15 @@ BindAll/
 │   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed (thread-safe)
 │   ├── ru_bigrams.txt                 # bundled Russian bigram seed (Google Books, CC BY 3.0)
 │   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
+├── Proofread/                  # step through LanguageTool's findings one at a time
+│   ├── TextIssue.swift                # shared issue model (UTF-16 ranges, stable ids)
+│   ├── IssueMerger.swift              # merge/shift/relocate/firstIssue -- pure range algebra
+│   ├── ProofreadCache.swift           # paragraph segmentation + per-paragraph issue cache
+│   ├── ProofreadLanguage.swift        # language resolution; ru/uk disambiguation for "auto"
+│   ├── LanguageToolProofreadProvider.swift # actor: paragraph-scoped checks + cache
+│   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
+│   ├── IssueApplier.swift             # validated single fix: AX write, else select+paste
+│   └── ProofreadController.swift      # session, key tap (only while the popup is up), auto-popup
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
@@ -67,7 +77,10 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Cmd+C ×3** → translate the selection, shown in a popup near the cursor
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
 - **Shift+Cmd+E** → Quick Translate window
-- **Shift+Cmd+C** → Correct (LanguageTool), only when enabled in Settings → General.
+- **Shift+Cmd+C** → **Proofread** (LanguageTool), only when enabled in Settings → General. Checks the
+  whole focused field (read over AX; nothing needs to be selected), selects the first problem **in the
+  field itself** and shows the fixes under it: arrows choose, Return applies, Tab skips, Esc exits.
+  Selecting a short problem word also pops the fixes up on its own, with no shortcut.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (off by default; enable on General, configure on the Autocomplete
@@ -96,9 +109,15 @@ count for that key is reached (only counts with a larger sibling wait out the ti
 - **Translation is always on-device** via Apple's `Translation` framework, regardless of the chosen
   engine. It uses a two-language pair (primary/secondary) and translates into whichever the source is
   not; the source is auto-detected with `NaturalLanguage`.
-- **Correct (LanguageTool)** is a separate, optional action (not in the engine dropdown). It sends the
-  selection to a LanguageTool server (public, self-hosted, or Premium) and applies the suggested fixes.
-  Configured under Providers; the Premium token lives in the Keychain.
+- **Proofread (LanguageTool)** is a separate, optional action (not in the engine dropdown), enabled on
+  General. LanguageTool is the only issue source: it is the one engine with real Russian grammar, and
+  it reads the sentence, so it finds agreement and punctuation rather than just unknown words.
+  (`NSSpellChecker` was tried as an offline layer and dropped -- its Russian guesses are poor: for
+  "Прувет" it offers "Прусте"/"Пруте", never "Привет". Harper is English-only and Apple's
+  FoundationModels does not support Russian at all, so neither is an option here.) The server, language
+  and Premium token (Keychain) are configured under Providers; the same settings drive it and the
+  legacy `correct()` path. Text is sent one paragraph at a time and cached by paragraph text, so
+  editing one sentence costs one request and re-checking costs none.
 - **Writing results back:** the frontmost app is captured when an action starts; the result is pasted
   with Cmd+V (reliable across native and Electron/Chromium apps). If focus moved to another app while
   the engine worked, the original app is re-activated first so the result lands where it started.

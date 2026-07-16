@@ -93,7 +93,7 @@ struct HotkeyConfig: Codable, Hashable {
     static let translate = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true), repeatCount: 3)
     static let screenTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true), repeatCount: 1)
     static let quickTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
-    /// Correct (LanguageTool): Cmd+Shift+C by default.
+    /// Proofread (LanguageTool): Cmd+Shift+C by default.
     static let correct = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
 }
 
@@ -126,6 +126,14 @@ struct Settings: Codable, Equatable {
     var autocompleteAcceptReturn: Bool = true // accept with Return in addition to Tab
     var autocompleteAppMode: String = "all"   // "all" | "allow" | "deny"
     var autocompleteApps: [String] = []       // bundle identifiers for allow/deny
+
+    // Proofread behaviour. Whether it runs at all, its shortcut, the server and the language come
+    // from the Correct settings below: it is the same action, reworked to step through the issues
+    // instead of applying them all blindly.
+    var proofreadAutoOnSelection: Bool = true  // show the popup when a problem word is selected
+    var proofreadMinLength: Int = 12           // shortest text worth checking
+    var proofreadAppMode: String = "all"       // "all" | "allow" | "deny"
+    var proofreadApps: [String] = []           // bundle identifiers for allow/deny
 
     // History of recent results (menu-bar submenu)
     var historyEnabled: Bool = true
@@ -175,6 +183,7 @@ extension Settings {
              restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteHorizontal,
              autocompleteFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
              autocompleteAcceptReturn, autocompleteAppMode, autocompleteApps,
+             proofreadAutoOnSelection, proofreadMinLength, proofreadAppMode, proofreadApps,
              historyEnabled, sourceLanguage, targetLanguage,
              correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
@@ -201,6 +210,10 @@ extension Settings {
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteAcceptReturn) { autocompleteAcceptReturn = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .autocompleteAppMode) { autocompleteAppMode = v }
         if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteApps) { autocompleteApps = v }
+        if let v = try c.decodeIfPresent(Bool.self, forKey: .proofreadAutoOnSelection) { proofreadAutoOnSelection = v }
+        if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMinLength) { proofreadMinLength = v }
+        if let v = try c.decodeIfPresent(String.self, forKey: .proofreadAppMode) { proofreadAppMode = v }
+        if let v = try c.decodeIfPresent([String].self, forKey: .proofreadApps) { proofreadApps = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .historyEnabled) { historyEnabled = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .sourceLanguage) { sourceLanguage = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .targetLanguage) { targetLanguage = v }

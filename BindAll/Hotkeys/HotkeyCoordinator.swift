@@ -10,6 +10,7 @@ final class HotkeyCoordinator: ObservableObject {
     private let translationCoordinator = TranslationCoordinator()
     private let popup = PopupController()
     private let autocomplete = AutocompleteController()
+    private let proofread = ProofreadController()
     private lazy var quickTranslate = QuickTranslateController(appState: appState)
 
     private var translationWindow: NSWindow?
@@ -38,6 +39,7 @@ final class HotkeyCoordinator: ObservableObject {
         reconfigureWatched()
         _ = monitor.start()
         updateAutocomplete()
+        updateProofread()
 
         appState.$settings
             .receive(on: RunLoop.main)
@@ -45,6 +47,7 @@ final class HotkeyCoordinator: ObservableObject {
                 self?.reconfigureWatched()
                 self?.refreshStatus()
                 self?.updateAutocomplete()
+                self?.updateProofread()
             }
             .store(in: &cancellables)
 
@@ -84,11 +87,32 @@ final class HotkeyCoordinator: ObservableObject {
         }
     }
 
+    /// Pushes the current settings into the proofread controller. It is the Correct action reworked,
+    /// so it takes its on/off switch, shortcut, server and language from the Correct settings.
+    private func updateProofread() {
+        let s = appState.settings
+        var cfg = ProofreadController.Config()
+        cfg.enabled = s.correctEnabled
+        cfg.autoOnSelection = s.proofreadAutoOnSelection
+        cfg.minLength = s.proofreadMinLength
+        cfg.restoreClipboard = s.restoreClipboard
+        cfg.appMode = ProofreadController.AppFilterMode(rawValue: s.proofreadAppMode) ?? .all
+        cfg.apps = Set(s.proofreadApps)
+        proofread.configure(cfg,
+                            engine: EngineFactory.makeLanguageTool(appState: appState),
+                            language: s.languageToolLanguage)
+        // Both features consume Tab, so only one popup may be live at a time.
+        proofread.onSessionChange = { [weak self] active in
+            if active { self?.autocomplete.suspend() } else { self?.autocomplete.resume() }
+        }
+    }
+
     func stop() {
         retryTimer?.invalidate()
         retryTimer = nil
         monitor.stop()
         autocomplete.stop()
+        proofread.stop()
         popup.close()
         translationWindow?.orderOut(nil)
     }
@@ -159,6 +183,13 @@ final class HotkeyCoordinator: ObservableObject {
             return
         }
 
+        // Proofread drives its own popup and does not occupy the engine pipeline, so like Quick
+        // Translate it stays available while another action is in flight.
+        if s.correctEnabled, matches(s.correctHotkey) {
+            proofread.run()
+            return
+        }
+
         guard !isBusy else { return }
 
         if matches(s.defaultActionHotkey) {
@@ -167,8 +198,6 @@ final class HotkeyCoordinator: ObservableObject {
             runTranslate()
         } else if matches(s.screenTranslateHotkey) {
             translateFromScreen()
-        } else if s.correctEnabled, matches(s.correctHotkey) {
-            runCorrect()
         } else if let key = s.actionKeys.first(where: { $0.hotkey.map(matches) == true }) {
             // A custom action key bound to its own shortcut: run its prompt on the selection.
             runDefaultAction(fixedInstruction: key.prompt)
@@ -285,39 +314,6 @@ final class HotkeyCoordinator: ObservableObject {
         }
     }
 
-    /// Runs the LanguageTool "Correct" action on the current selection. The Correct shortcut is not a
-    /// copy shortcut, so the selection is copied first; the result is written back in place.
-    private func runCorrect() {
-        let settings = appState.settings
-        let engine = EngineFactory.makeLanguageTool(appState: appState)
-        beginBusy()
-        let target = TextInjector.FocusTarget.capture()
-
-        currentTask = Task { [weak self] in
-            guard let self else { return }
-            defer { self.endBusy() }
-
-            guard let text = SelectionReader.copyCurrentSelection(),
-                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                self.popup.show(title: "BindAll", text: "No text selected.")
-                return
-            }
-
-            do {
-                var result = try await engine.correct(text)
-                if Task.isCancelled { return }
-                if settings.maskAISlop {
-                    result = MaskAISlop.apply(to: result)
-                }
-                self.recordHistory(kind: .action, input: text, output: result, engine: "LanguageTool")
-                TextInjector.replaceSelection(with: result, restorePrevious: settings.restoreClipboard, target: target)
-            } catch {
-                if self.isCancellation(error) { return }
-                self.popup.show(title: "Correct", text: error.localizedDescription)
-            }
-        }
-    }
-
     private func runTranslate(forceCopy: Bool = false) {
         beginBusy()
         Task { [weak self] in
@@ -340,12 +336,18 @@ final class HotkeyCoordinator: ObservableObject {
 
     /// Invoked from the status menu. Runs after a short delay so the menu fully dismisses and focus
     /// returns to the previously active app before the selection is copied.
-    private enum MenuAction { case fix, translate, correct }
+    private enum MenuAction { case fix, translate }
 
     func menuFix() { runFromMenu(.fix) }
     func menuTranslate() { runFromMenu(.translate) }
-    func menuCorrect() { runFromMenu(.correct) }
     func menuScreenTranslate() { translateFromScreen() }
+
+    /// Runs after a short delay so the menu dismisses and focus returns to the user's field first --
+    /// otherwise the focused element we would read is the menu, not their text.
+    func menuProofread() {
+        guard appState.settings.correctEnabled else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.proofread.run() }
+    }
     func menuQuickTranslate() { quickTranslate.toggle() }
 
     private func runFromMenu(_ which: MenuAction) {
@@ -355,7 +357,6 @@ final class HotkeyCoordinator: ObservableObject {
             switch which {
             case .fix: self.runDefaultAction(forceCopy: true)
             case .translate: self.runTranslate(forceCopy: true)
-            case .correct: self.runCorrect()
             }
         }
     }

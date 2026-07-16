@@ -9,10 +9,9 @@ enum IssueKind: String, Codable, CaseIterable {
     case style
 }
 
-/// Which provider produced an issue. Also decides precedence when two providers report the same
-/// range: LanguageTool sees the sentence, the spell checker only sees the word.
+/// Which provider produced an issue. LanguageTool is the only source today; the case exists so the
+/// model does not have to change if an LLM-backed style pass is added later.
 enum IssueSource: String, Codable {
-    case spellChecker
     case languageTool
     case llm
 }
@@ -62,14 +61,5 @@ struct TextIssue: Identifiable, Equatable {
 
     static func identity(source: IssueSource, ruleId: String?, range: NSRange, original: String) -> String {
         "\(source.rawValue)|\(ruleId ?? "")|\(range.location)|\(range.length)|\(original)"
-    }
-
-    /// Precedence when two providers report the same range. Higher wins.
-    var priority: Int {
-        switch source {
-        case .languageTool: return kind == .spelling ? 2 : 3
-        case .llm: return 1
-        case .spellChecker: return 0
-        }
     }
 }

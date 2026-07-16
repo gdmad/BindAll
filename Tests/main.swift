@@ -144,7 +144,7 @@ check(!AutocompleteEngine.isWordTerminator("a"), "letter is not a boundary")
 
 // MARK: - Proofread
 
-func issue(_ location: Int, _ length: Int, source: IssueSource = .spellChecker,
+func issue(_ location: Int, _ length: Int, source: IssueSource = .languageTool,
            kind: IssueKind = .spelling, original: String = "x",
            replacements: [String] = [], ruleId: String? = nil) -> TextIssue {
     TextIssue(range: NSRange(location: location, length: length), kind: kind, shortMessage: "",
@@ -205,45 +205,48 @@ eq(idA, idB, "same issue re-checked yields the same id")
 check(idA != issue(6, 3, original: "teh").id, "different location yields a different id")
 
 print("IssueMerger.merge")
-let ltSpell = issue(0, 3, source: .languageTool, original: "teh", replacements: ["the"], ruleId: "LT")
-let spSpell = issue(0, 3, source: .spellChecker, original: "teh", replacements: ["the", "tech"])
-let sameRange = IssueMerger.merge([[spSpell], [ltSpell]])
+// LanguageTool fires several rules on one word; the user must be asked about it once.
+let typo = issue(0, 3, kind: .spelling, original: "teh", replacements: ["the"], ruleId: "TYPO")
+let dupe = issue(0, 3, kind: .grammar, original: "teh", replacements: ["the", "tea"], ruleId: "OTHER")
+let sameRange = IssueMerger.merge([typo, dupe])
 check(sameRange.count == 1, "identical ranges collapse to one issue")
-check(sameRange[0].source == .languageTool, "LanguageTool wins over the spell checker")
-check(sameRange[0].replacements == ["the", "tech"], "replacements are unioned, deduped, winner first")
+check(sameRange[0].replacements == ["the", "tea"], "replacements are unioned and deduped")
 
-let overlap = IssueMerger.merge([[issue(0, 5, source: .languageTool, original: "a b c")], [issue(2, 3)]])
+let overlap = IssueMerger.merge([issue(0, 5, original: "a b c"), issue(2, 3, original: "b c")])
 check(overlap.count == 1 && overlap[0].range.length == 5, "overlapping issue loses to the longer one")
 
-let disjoint = IssueMerger.merge([[issue(10, 2, original: "aa")], [issue(0, 2, original: "bb")]])
+let disjoint = IssueMerger.merge([issue(10, 2, original: "aa"), issue(0, 2, original: "bb")])
 check(disjoint.count == 2, "disjoint issues both survive")
 check(disjoint[0].range.location == 0, "merge output is sorted by location")
+check(IssueMerger.merge([issue(0, 0, original: "")]).isEmpty, "empty ranges are dropped")
 
-let ignored = IssueMerger.merge([[issue(0, 4, original: "Swift")]], ignoring: ["swift"])
-check(ignored.isEmpty, "ignored words are dropped case-insensitively")
-check(IssueMerger.merge([[issue(0, 0, original: "")]]).isEmpty, "empty ranges are dropped")
+print("IssueMerger.firstIssue(overlapping:)")
+let picked = [issue(0, 3, original: "teh"), issue(10, 4, original: "wrng")]
+check(IssueMerger.firstIssue(in: picked, overlapping: NSRange(location: 10, length: 4))?.original == "wrng",
+      "a selection on an issue finds it")
+check(IssueMerger.firstIssue(in: picked, overlapping: NSRange(location: 11, length: 1))?.original == "wrng",
+      "a partial selection inside an issue finds it")
+check(IssueMerger.firstIssue(in: picked, overlapping: NSRange(location: 5, length: 2)) == nil,
+      "a selection on clean text finds nothing")
+check(IssueMerger.firstIssue(in: picked, overlapping: NSRange(location: 12, length: 0))?.original == "wrng",
+      "a caret inside an issue finds it")
 
-print("IssueMerger.shift")
-let base = [issue(0, 3, original: "aaa"), issue(10, 4, original: "bbbb"), issue(20, 2, original: "cc")]
-let longer = IssueMerger.shift(base, replacedRange: NSRange(location: 10, length: 4), replacementUTF16Length: 6)
-check(longer.count == 2, "the applied issue itself is dropped")
-check(longer[0].range.location == 0, "issue before the edit does not move")
-check(longer[1].range.location == 22, "issue after a longer replacement slides right")
-let shorter = IssueMerger.shift(base, replacedRange: NSRange(location: 10, length: 4), replacementUTF16Length: 1)
-check(shorter[1].range.location == 17, "issue after a shorter replacement slides left")
-let same = IssueMerger.shift(base, replacedRange: NSRange(location: 10, length: 4), replacementUTF16Length: 4)
-check(same[1].range.location == 20, "equal-length replacement leaves later issues alone")
-let atEnd = IssueMerger.shift(base, replacedRange: NSRange(location: 20, length: 2), replacementUTF16Length: 5)
-check(atEnd.count == 2 && atEnd.last?.range.location == 10, "replacing the last issue keeps the earlier ones")
-let touching = IssueMerger.shift([issue(0, 3, original: "aaa")],
-                                 replacedRange: NSRange(location: 3, length: 2), replacementUTF16Length: 9)
-check(touching.count == 1, "an issue ending exactly where the edit starts survives")
-
-print("IssueMerger.excludingCaretWord")
-let caretIssues = [issue(0, 4, original: "typo"), issue(10, 4, original: "word")]
-check(IssueMerger.excludingCaretWord(caretIssues, caret: 2).count == 1, "issue under the caret is hidden")
-check(IssueMerger.excludingCaretWord(caretIssues, caret: 4).count == 1, "caret at the word end still hides it")
-check(IssueMerger.excludingCaretWord(caretIssues, caret: 7).count == 2, "caret elsewhere hides nothing")
+print("IssueMerger.relocate")
+let teh = issue(4, 3, original: "teh")
+check(IssueMerger.relocate(teh, in: "the teh cat") == NSRange(location: 4, length: 3),
+      "unchanged text relocates to the same range")
+// The user typed "Well, " at the start while the panel was open.
+check(IssueMerger.relocate(teh, in: "Well, the teh cat") == NSRange(location: 10, length: 3),
+      "text shifted by an edit is found at its new offset")
+check(IssueMerger.relocate(teh, in: "the cat") == nil, "vanished text does not relocate")
+// The old range no longer matches, and two candidates are equally plausible: refuse to guess.
+check(IssueMerger.relocate(teh, in: "xxxx teh teh") == nil, "ambiguous text does not relocate")
+// An exact hit at the original range wins even when the word occurs twice: the text did not move.
+check(IssueMerger.relocate(teh, in: "teh teh cat") == NSRange(location: 4, length: 3),
+      "a still-valid range is used without searching")
+check(IssueMerger.relocate(teh, in: "the cat sat on the mat and teh dog", window: 5) == nil,
+      "a match far outside the window is not used")
+check(IssueMerger.relocate(issue(0, 0, original: ""), in: "abc") == nil, "empty original never relocates")
 
 print("TextSegmenter.paragraphs")
 func tiles(_ ps: [Paragraph], _ text: String) -> Bool {
@@ -301,8 +304,6 @@ eq(ProofreadLanguage.disambiguateCyrillic("привіт як справи", cand
 eq(ProofreadLanguage.disambiguateCyrillic("hello", candidate: "en", preferred: "ru"), "en",
    "non-Cyrillic detection is left alone")
 eq(ProofreadLanguage.baseCode("en-US"), "en", "baseCode strips the region")
-check(ProofreadLanguage.spellCheckerSupportsGrammar("en-GB"), "NSSpellChecker has English grammar")
-check(!ProofreadLanguage.spellCheckerSupportsGrammar("ru"), "NSSpellChecker has no Russian grammar")
 
 print("")
 if failures == 0 {
