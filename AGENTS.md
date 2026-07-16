@@ -72,8 +72,11 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (off by default; enable on General, configure on the Autocomplete
   tab): as you type, a list of case-matched completions appears near the caret; arrow keys choose,
-  **Tab** (and optionally Return) inserts. It can predict the next word after a space and learn the
-  words you use (local `AutocompleteLearningStore`). Configurable: count, column/line layout, text
+  **Tab** (and optionally Return) inserts; any other key, a click anywhere, or leaving the app
+  dismisses it. It can predict the next word after a space and learn the words you use (local
+  `AutocompleteLearningStore`): a word is learned when a space or punctuation closes it, and when a
+  suggestion is accepted. Return deliberately does not learn (it submits password fields).
+  Configurable: count, column/line layout, text
   size, dictionary language, and per-app allow/deny. Uses AX text+caret where available, otherwise a
   keystroke buffer (works in most apps). Skipped in password fields and BindAll's own windows.
   Its tap is an active tap (it consumes Tab/arrows while suggesting), so it runs on a **dedicated

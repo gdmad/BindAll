@@ -133,6 +133,15 @@ eq(AutocompleteEngine.recased("apple", like: "APP"), "APPLE", "all-caps partial 
 eq(AutocompleteEngine.recased("apple", like: "app"), "apple", "lowercase keeps dictionary case")
 eq(AutocompleteEngine.recased("iPhone", like: "iph"), "iPhone", "lowercase keeps proper-noun case")
 
+print("Autocomplete isWordTerminator")
+check(AutocompleteEngine.isWordTerminator("."), "period ends a word")
+check(AutocompleteEngine.isWordTerminator(","), "comma ends a word")
+check(AutocompleteEngine.isWordTerminator("!"), "exclamation ends a word")
+check(!AutocompleteEngine.isWordTerminator("'"), "apostrophe is inside a contraction")
+check(!AutocompleteEngine.isWordTerminator("-"), "hyphen is inside a compound word")
+check(!AutocompleteEngine.isWordTerminator("5"), "digit is inside a token")
+check(!AutocompleteEngine.isWordTerminator("a"), "letter is not a boundary")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")

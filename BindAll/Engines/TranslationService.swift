@@ -5,9 +5,26 @@ import NaturalLanguage
 
 /// Helpers around language-pack availability for on-device translation.
 enum TranslationSupport {
+    /// Reused across queries: a fresh instance answers its first query from a cold cache and can
+    /// report an installed pair as merely `.supported`.
+    private static let availability = LanguageAvailability()
+
     /// True only if the offline assets for the pair are already installed (no download needed).
     static func isInstalled(from source: Locale.Language, to target: Locale.Language) async -> Bool {
-        await LanguageAvailability().status(from: source, to: target) == .installed
+        await availability.status(from: source, to: target) == .installed
+    }
+
+    /// Like `isInstalled`, but re-queries once before believing a negative answer: the first status
+    /// query in a process can come back stale, which falsely prompts to download an installed pack.
+    static func isInstalledConfirmed(from source: Locale.Language, to target: Locale.Language) async -> Bool {
+        if await isInstalled(from: source, to: target) { return true }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        return await isInstalled(from: source, to: target)
+    }
+
+    /// Issues a throwaway status query at launch so the first real check is not the cold one.
+    static func prewarm(from source: Locale.Language, to target: Locale.Language) {
+        Task { _ = await availability.status(from: source, to: target) }
     }
 
     /// Opens System Settings at Language & Region, where Translation Languages are managed.

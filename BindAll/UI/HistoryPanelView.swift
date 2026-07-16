@@ -57,7 +57,7 @@ struct HistoryPanelView: View {
                         .padding(.top, 3)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(preview(entry.output))
-                            .lineLimit(isExpanded ? nil : 2)
+                            .lineLimit(1)
                             .font(.body)
                         Text("\(entry.kind.label) · \(entry.engine)")
                             .font(.caption)

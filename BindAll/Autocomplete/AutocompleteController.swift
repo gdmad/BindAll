@@ -39,6 +39,7 @@ final class AutocompleteController {
 
     private var debounce: DispatchWorkItem?
     private var appActivationObserver: NSObjectProtocol?
+    private var clickMonitor: Any?
 
     /// Minimal state the tap-thread callback reads to decide whether to consume a key. Written on the
     /// main thread via `syncSuppression()`; read on the tap thread under `suppressionLock`.
@@ -177,6 +178,7 @@ final class AutocompleteController {
         suppressorEnabled = false
         if let observer = appActivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         appActivationObserver = nil
+        setClickMonitor(enabled: false)
         debounce?.cancel()
         debounce = nil
         resetWord()
@@ -282,6 +284,22 @@ final class AutocompleteController {
             suppressorEnabled = hasSuggestion
             CGEvent.tapEnable(tap: tap, enable: hasSuggestion)
         }
+        setClickMonitor(enabled: hasSuggestion)
+    }
+
+    /// The popup ignores mouse events, so a click never reaches it: without this it keeps floating on
+    /// top after a click moves the caret away (an app switch is already covered by the observer in
+    /// `start()`, but a click inside the same app is not). Passive, and only alive while the popup is.
+    private func setClickMonitor(enabled: Bool) {
+        if enabled {
+            guard clickMonitor == nil else { return }
+            clickMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] _ in self?.resetWord() }
+        } else if let monitor = clickMonitor {
+            NSEvent.removeMonitor(monitor)
+            clickMonitor = nil
+        }
     }
 
     private func onKey(keyCode: Int, typed: String, modified: Bool) {
@@ -295,6 +313,8 @@ final class AutocompleteController {
             return
         }
 
+        // Return discards the word instead of learning it: it is what submits a password field, and
+        // the learning path does not inspect the focused element.
         let navKeys: Set<Int> = [kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter, kVK_LeftArrow, kVK_RightArrow,
                                  kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown]
         if navKeys.contains(keyCode) {
@@ -305,14 +325,19 @@ final class AutocompleteController {
             typedBuffer = String(typedBuffer.dropLast())
         } else if typed.count == 1, let scalar = typed.unicodeScalars.first, CharacterSet.letters.contains(scalar) {
             typedBuffer.append(typed)
+        } else if typed.count == 1, let c = typed.first, AutocompleteEngine.isWordTerminator(c) {
+            // Punctuation completes the word. The space that usually follows drives the next-word
+            // prediction, so predicting here would only be premature.
+            handleWordBoundary(predictNext: false)
+            return
         } else {
-            resetWord() // boundary (digit, punctuation, etc.)
+            resetWord() // digits, apostrophes, hyphens and other intra-token characters
             return
         }
         scheduleRefresh()
     }
 
-    private func handleWordBoundary() {
+    private func handleWordBoundary(predictNext: Bool = true) {
         let finished = typedBuffer
         if config.learn, !finished.isEmpty {
             store.record(word: finished,
@@ -322,7 +347,7 @@ final class AutocompleteController {
         if !finished.isEmpty { prevWord2 = prevWord; prevWord = finished }
         typedBuffer = ""
         clearSuggestion()
-        if config.nextWord, !prevWord.isEmpty {
+        if predictNext, config.nextWord, !prevWord.isEmpty {
             scheduleRefresh(nextWord: true)
         }
     }

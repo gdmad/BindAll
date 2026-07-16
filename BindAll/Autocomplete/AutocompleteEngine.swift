@@ -18,6 +18,16 @@ enum AutocompleteEngine {
         return ns.substring(with: NSRange(location: start, length: caret - start))
     }
 
+    private static let wordTerminators: Set<Character> = [".", ",", "!", "?", ";", ":",
+                                                          ")", "]", "}", "\"", "»", "”", "…"]
+
+    /// True for characters that close the word being typed, so it is complete and worth learning.
+    /// Apostrophes, hyphens and digits are deliberately absent: they sit inside a token, and treating
+    /// them as boundaries would learn "don" from "don't" or "co" from "co-founder".
+    static func isWordTerminator(_ character: Character) -> Bool {
+        wordTerminators.contains(character)
+    }
+
     /// Up to `limit` suggestions for `partial`: learned words first (already frequency-ordered), then
     /// dictionary completions that extend it, then spelling guesses. `language` is "auto" or a BCP-47
     /// code. Each result is recased to the typed word's case pattern. Main-thread only (NSSpellChecker).

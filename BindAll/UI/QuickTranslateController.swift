@@ -223,7 +223,7 @@ struct QuickTranslateView: View {
             : Locale.Language(identifier: source)
         let tgt = Locale.Language(identifier: target)
         Task {
-            if await TranslationSupport.isInstalled(from: src, to: tgt) {
+            if await TranslationSupport.isInstalledConfirmed(from: src, to: tgt) {
                 do {
                     output = try await translation.translate(text, from: src, to: tgt)
                     onTranslated(text, output)

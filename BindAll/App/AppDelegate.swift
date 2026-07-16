@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         coordinator.start()
         // Warm up the on-device model so the first action is not paying the cold-start cost.
         AppleFoundationEngine.prewarm()
+        prewarmTranslation()
         // Ask for Accessibility up front (needed for the global hotkeys); the system shows its prompt
         // only if not yet granted. No window is opened automatically.
         AccessibilityPermission.requestIfNeeded()
@@ -40,6 +41,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func applicationWillTerminate(_ notification: Notification) {
         coordinator.stop()
+    }
+
+    /// The pair does not matter; issuing any status query at launch is what warms the availability
+    /// service, so the first real check does not report an installed pack as missing.
+    private func prewarmTranslation() {
+        let s = appState.settings
+        let sourceCode = s.sourceLanguage == AppLanguages.autoTag ? s.targetLanguage : s.sourceLanguage
+        TranslationSupport.prewarm(from: Locale.Language(identifier: sourceCode),
+                                   to: Locale.Language(identifier: s.targetLanguage))
     }
 
     // MARK: - Status bar item

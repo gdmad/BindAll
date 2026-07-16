@@ -223,6 +223,7 @@ final class HotkeyCoordinator: ObservableObject {
     private func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }
         if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        if case OCRService.OCRError.cancelled = error { return true }
         return false
     }
 
@@ -370,6 +371,7 @@ final class HotkeyCoordinator: ObservableObject {
                 let text = try await OCRService.captureAndRecognize()
                 await self.translateAndShow(text, historyKind: .ocr)
             } catch {
+                if self.isCancellation(error) { return }
                 self.popup.show(title: "OCR", text: error.localizedDescription)
             }
         }
@@ -414,8 +416,8 @@ final class HotkeyCoordinator: ObservableObject {
         // unknown source, let the Translation framework auto-detect and surface any real problem
         // itself, rather than guessing a source and prompting to download something already present.
         if let from, from.languageCode?.identifier != targetCode {
-            let forward = await TranslationSupport.isInstalled(from: from, to: target)
-            let backward = await TranslationSupport.isInstalled(from: target, to: from)
+            let forward = await TranslationSupport.isInstalledConfirmed(from: from, to: target)
+            let backward = await TranslationSupport.isInstalledConfirmed(from: target, to: from)
             if !forward && !backward {
                 popup.show(
                     title: "Translation",
