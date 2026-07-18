@@ -142,6 +142,59 @@ check(!AutocompleteEngine.isWordTerminator("-"), "hyphen is inside a compound wo
 check(!AutocompleteEngine.isWordTerminator("5"), "digit is inside a token")
 check(!AutocompleteEngine.isWordTerminator("a"), "letter is not a boundary")
 
+print("LanguageToolMode.inferred")
+check(LanguageToolMode.inferred(fromBaseURL: "https://api.languagetool.org/v2") == .free,
+      "public URL infers free")
+check(LanguageToolMode.inferred(fromBaseURL: "https://api.languagetoolplus.com/v2") == .premium,
+      "plus URL infers premium")
+check(LanguageToolMode.inferred(fromBaseURL: "http://home.lan:8081/v2") == .selfHosted,
+      "a custom URL infers self-hosted")
+
+print("Settings.languageToolConnection")
+var s = Settings()
+s.languageToolUsername = "me@x.com"
+s.languageToolBaseURL = "http://home.lan:8081/v2"
+
+s.languageToolMode = .free
+let free = s.languageToolConnection(token: "secret")
+eq(free.baseURL, "https://api.languagetool.org/v2", "free forces the public URL")
+check(free.username.isEmpty && free.apiKey.isEmpty, "free never sends credentials, even if filled in")
+
+s.languageToolMode = .premium
+let prem = s.languageToolConnection(token: "secret")
+eq(prem.baseURL, "https://api.languagetoolplus.com/v2", "premium forces the plus host")
+eq(prem.username, "me@x.com", "premium sends the username")
+eq(prem.apiKey, "secret", "premium sends the token")
+
+s.languageToolMode = .selfHosted
+let selfh = s.languageToolConnection(token: "secret")
+eq(selfh.baseURL, "http://home.lan:8081/v2", "self-hosted uses the user URL")
+eq(selfh.apiKey, "secret", "self-hosted forwards the token when present")
+
+print("Settings mode migration (resilient decoding)")
+func decode(_ json: String) -> Settings {
+    try! JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+}
+// Saved before modes existed: mode is inferred from the stored URL.
+check(decode("{\"languageToolBaseURL\":\"https://api.languagetool.org/v2\"}").languageToolMode == .free,
+      "legacy public URL migrates to free")
+check(decode("{\"languageToolBaseURL\":\"https://api.languagetoolplus.com/v2\"}").languageToolMode == .premium,
+      "legacy plus URL migrates to premium")
+check(decode("{}").languageToolMode == .free, "empty settings default to free")
+// An explicitly stored mode wins over inference.
+check(decode("{\"languageToolMode\":\"selfHosted\",\"languageToolBaseURL\":\"https://api.languagetool.org/v2\"}").languageToolMode == .selfHosted,
+      "an explicit stored mode is kept")
+
+print("LanguageToolEngine.authParams")
+let loneUser = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", apiKey: "")
+check(loneUser["username"] == nil && loneUser["apiKey"] == nil, "lone username is dropped (would 400)")
+let loneKey = LanguageToolEngine.authParams(["text": "x"], username: "", apiKey: "abc")
+check(loneKey["apiKey"] == nil, "lone apiKey is dropped")
+let pair = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", apiKey: "abc")
+check(pair["username"] == "me@x.com" && pair["apiKey"] == "abc", "a full pair is attached")
+check(LanguageToolEngine.authParams(["text": "x"], username: "", apiKey: "")["text"] == "x",
+      "original params survive")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")

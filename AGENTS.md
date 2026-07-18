@@ -97,8 +97,14 @@ count for that key is reached (only counts with a larger sibling wait out the ti
   engine. It uses a two-language pair (primary/secondary) and translates into whichever the source is
   not; the source is auto-detected with `NaturalLanguage`.
 - **Correct (LanguageTool)** is a separate, optional action (not in the engine dropdown). It sends the
-  selection to a LanguageTool server (public, self-hosted, or Premium) and applies the suggested fixes.
-  Configured under Providers; the Premium token lives in the Keychain.
+  selection to a LanguageTool server and applies the suggested fixes. Configured under Providers via an
+  explicit **connection mode** (`LanguageToolMode`): **Free public** (`api.languagetool.org`, no
+  credentials -- the public server rejects them with HTTP 400), **Premium**
+  (`api.languagetoolplus.com`, a different host, requires username + token), or **Self-hosted** (your
+  own URL, optional credentials). `Settings.languageToolConnection(token:)` resolves the real endpoint
+  and only puts credentials on the wire where they belong; `LanguageToolEngine.authParams` is a final
+  guard that never sends a lone username or apiKey. The Premium token lives in the Keychain. Modes are
+  inferred from the stored URL when migrating older settings.
 - **Writing results back:** the frontmost app is captured when an action starts; the result is pasted
   with Cmd+V (reliable across native and Electron/Chromium apps). If focus moved to another app while
   the engine worked, the original app is re-activated first so the result lands where it started.

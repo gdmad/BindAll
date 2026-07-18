@@ -84,13 +84,23 @@ struct LanguageToolEngine {
     }
 
     private func formBody(_ params: [String: String]) -> Data {
-        var all = params
-        if !username.isEmpty { all["username"] = username }
-        if !apiKey.isEmpty { all["apiKey"] = apiKey }
+        let all = Self.authParams(params, username: username, apiKey: apiKey)
         let encoded = all.map { key, value in
             "\(Self.formEncode(key))=\(Self.formEncode(value))"
         }.joined(separator: "&")
         return Data(encoded.utf8)
+    }
+
+    /// Adds credentials to the request only when both are present. LanguageTool rejects a lone
+    /// username or apiKey with HTTP 400 ("you need to specify both"), so a half-filled pair must fall
+    /// back to an anonymous request rather than a broken one.
+    static func authParams(_ params: [String: String], username: String, apiKey: String) -> [String: String] {
+        var all = params
+        if !username.isEmpty, !apiKey.isEmpty {
+            all["username"] = username
+            all["apiKey"] = apiKey
+        }
+        return all
     }
 
     private static let formAllowed: CharacterSet = {

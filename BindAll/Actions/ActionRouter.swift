@@ -21,10 +21,12 @@ enum EngineFactory {
     /// Builds the LanguageTool client used by the "Correct" action from settings + Keychain.
     static func makeLanguageTool(appState: AppState) -> LanguageToolEngine {
         let s = appState.settings
+        // The mode decides the real endpoint and whether credentials go on the wire.
+        let conn = s.languageToolConnection(token: appState.languageToolToken())
         return LanguageToolEngine(
-            baseURL: s.languageToolBaseURL,
-            username: s.languageToolUsername,
-            apiKey: appState.languageToolToken(),
+            baseURL: conn.baseURL,
+            username: conn.username,
+            apiKey: conn.apiKey,
             language: s.languageToolLanguage
         )
     }
