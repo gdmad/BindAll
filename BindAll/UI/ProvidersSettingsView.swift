@@ -106,8 +106,11 @@ struct ProvidersSettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: appState.settings.languageToolMode) { _, mode in
-                        // Pre-fill the URL for the chosen mode; the field stays editable.
-                        if let url = mode.defaultURL { appState.settings.languageToolBaseURL = url }
+                        // Pre-fill the URL for the chosen mode; the field stays editable. Deferred to
+                        // the next runloop tick so we do not publish a change to `settings` from
+                        // within the view update that is committing the mode change.
+                        guard let url = mode.defaultURL else { return }
+                        DispatchQueue.main.async { appState.settings.languageToolBaseURL = url }
                     }
 
                     LabeledContent("Server URL") {
