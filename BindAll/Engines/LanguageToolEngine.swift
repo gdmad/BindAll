@@ -16,7 +16,7 @@ struct LTMatch: Equatable {
 /// Grammar and spelling correction via a LanguageTool server (the public API, a self-hosted server,
 /// or LanguageTool Premium). Unlike the AI engines, this does not follow instructions: it only
 /// corrects the text, so it powers the dedicated "Correct" action rather than the engine dropdown.
-struct LanguageToolEngine {
+struct LanguageToolEngine: Equatable {
     /// Base URL including the API version, e.g. `https://api.languagetool.org/v2`.
     let baseURL: String
     /// Account email (Premium only; ignored by the free/self-hosted servers).

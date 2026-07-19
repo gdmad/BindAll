@@ -151,6 +151,15 @@ func issue(_ location: Int, _ length: Int, source: IssueSource = .languageTool,
               message: "", replacements: replacements, ruleId: ruleId, source: source, original: original)
 }
 
+print("LanguageToolEngine Equatable")
+// The proofread provider reconfigures only when the engine actually changes; a token-only change
+// must count, so equality has to include the credentials, not just the URL.
+let engA = LanguageToolEngine(baseURL: "u", username: "me", apiKey: "k1", language: "ru")
+let engSame = LanguageToolEngine(baseURL: "u", username: "me", apiKey: "k1", language: "ru")
+let engToken = LanguageToolEngine(baseURL: "u", username: "me", apiKey: "k2", language: "ru")
+check(engA == engSame, "identical engines are equal")
+check(engA != engToken, "a token-only change makes engines unequal")
+
 print("LanguageToolEngine.parseMatches")
 let ltJSON = """
 {"matches": [

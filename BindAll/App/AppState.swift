@@ -54,7 +54,10 @@ final class AppState: ObservableObject {
 
     func setLanguageToolToken(_ value: String) {
         KeychainStore.set(value, account: Self.languageToolAccount)
-        objectWillChange.send()
+        // The token lives in the Keychain, not in `settings`, so observers of `$settings` (the hotkey
+        // coordinator, which rebuilds the LanguageTool engine) would not otherwise learn it changed.
+        // Re-emit settings to trigger a reconfigure with the new token.
+        settings = settings
     }
 
     // MARK: - Provider config helpers

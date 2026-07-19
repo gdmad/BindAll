@@ -21,9 +21,11 @@ actor LanguageToolProofreadProvider {
         self.language = language
     }
 
-    /// Applies new settings. Server or language changes invalidate everything we cached.
+    /// Applies new settings. Any change -- server, username, token or language -- invalidates the
+    /// cache, since a different account or endpoint can return different issues. Comparing the whole
+    /// engine (not just its URL) is what lets a credentials-only change actually take effect.
     func configure(engine: LanguageToolEngine, language: String) {
-        guard engine.baseURL != self.engine.baseURL || language != self.language else { return }
+        guard engine != self.engine || language != self.language else { return }
         self.engine = engine
         self.language = language
         cache.clear()
