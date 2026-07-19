@@ -116,21 +116,14 @@ enum LanguageToolMode: String, Codable, CaseIterable {
         }
     }
 
-    /// The fixed endpoint for free/premium; nil for self-hosted, which uses the user's URL.
-    var fixedURL: String? {
+    /// The URL pre-filled when the user picks this mode; nil for self-hosted (keeps the current URL).
+    /// The field stays editable, so this is only a starting point.
+    var defaultURL: String? {
         switch self {
         case .free: return "https://api.languagetool.org/v2"
         case .premium: return "https://api.languagetoolplus.com/v2"
         case .selfHosted: return nil
         }
-    }
-
-    /// Best-guess mode for a stored base URL, used to migrate settings saved before modes existed.
-    static func inferred(fromBaseURL url: String) -> LanguageToolMode {
-        let host = URL(string: url.trimmingCharacters(in: .whitespaces))?.host ?? url
-        if host.contains("api.languagetoolplus.com") { return .premium }
-        if host.contains("api.languagetool.org") { return .free }
-        return .selfHosted
     }
 }
 
@@ -187,10 +180,9 @@ struct Settings: Codable, Equatable {
     func languageToolConnection(token: String) -> (baseURL: String, username: String, apiKey: String) {
         switch languageToolMode {
         case .free:
-            return (LanguageToolMode.free.fixedURL!, "", "")
-        case .premium:
-            return (LanguageToolMode.premium.fixedURL!, languageToolUsername, token)
-        case .selfHosted:
+            // The public server rejects credentials, so never send them regardless of the fields.
+            return (languageToolBaseURL, "", "")
+        case .premium, .selfHosted:
             return (languageToolBaseURL, languageToolUsername, token)
         }
     }
@@ -260,14 +252,7 @@ extension Settings {
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolBaseURL) { languageToolBaseURL = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolUsername) { languageToolUsername = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolLanguage) { languageToolLanguage = v }
-        // Migrate settings saved before modes existed: infer the mode from the stored URL. This also
-        // rescues users who had a stray username on the public URL -- they become .free, which never
-        // sends credentials, so the 400 they were getting disappears.
-        if let v = try c.decodeIfPresent(LanguageToolMode.self, forKey: .languageToolMode) {
-            languageToolMode = v
-        } else {
-            languageToolMode = LanguageToolMode.inferred(fromBaseURL: languageToolBaseURL)
-        }
+        if let v = try c.decodeIfPresent(LanguageToolMode.self, forKey: .languageToolMode) { languageToolMode = v }
         if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .correctHotkey) { correctHotkey = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .openRouterFreeOnly) { openRouterFreeOnly = v }
         if let v = try c.decodeIfPresent([ProviderConfig].self, forKey: .providers) { providers = v }

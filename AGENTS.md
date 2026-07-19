@@ -103,8 +103,8 @@ count for that key is reached (only counts with a larger sibling wait out the ti
   (`api.languagetoolplus.com`, a different host, requires username + token), or **Self-hosted** (your
   own URL, optional credentials). `Settings.languageToolConnection(token:)` resolves the real endpoint
   and only puts credentials on the wire where they belong; `LanguageToolEngine.authParams` is a final
-  guard that never sends a lone username or apiKey. The Premium token lives in the Keychain. Modes are
-  inferred from the stored URL when migrating older settings.
+  guard that never sends a lone username or apiKey. The Premium token lives in the Keychain. The URL is
+  pre-filled per mode but stays editable; there is no settings migration (mode defaults to Free).
 - **Writing results back:** the frontmost app is captured when an action starts; the result is pasted
   with Cmd+V (reliable across native and Electron/Chromium apps). If focus moved to another app while
   the engine worked, the original app is re-activated first so the result lands where it started.

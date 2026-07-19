@@ -105,21 +105,28 @@ struct ProvidersSettingsView: View {
                         ForEach(LanguageToolMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: appState.settings.languageToolMode) { _, mode in
+                        // Pre-fill the URL for the chosen mode; the field stays editable.
+                        if let url = mode.defaultURL { appState.settings.languageToolBaseURL = url }
+                    }
 
-                    switch appState.settings.languageToolMode {
-                    case .free:
-                        LabeledContent("Server") {
-                            Text("api.languagetool.org").foregroundStyle(.secondary)
+                    LabeledContent("Server URL") {
+                        TextField("", text: $appState.settings.languageToolBaseURL,
+                                  prompt: Text("https://api.languagetool.org/v2"))
+                            .labelsHidden().textFieldStyle(.plain).darkField()
+                    }
+                    LabeledContent("Language") {
+                        Picker("", selection: $appState.settings.languageToolLanguage) {
+                            Text("Auto Detect").tag(AppLanguages.autoTag)
+                            ForEach(AppLanguages.list, id: \.code) { Text($0.name).tag($0.code) }
                         }
-                        Text("Free public server: no account needed. Rate-limited, and your text is sent to languagetool.org.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    case .premium:
-                        LabeledContent("Server") {
-                            Text("api.languagetoolplus.com").foregroundStyle(.secondary)
-                        }
+                        .labelsHidden().fixedSize()
+                    }
+
+                    // Credentials only matter for Premium (required) and self-hosted with auth (optional).
+                    if appState.settings.languageToolMode != .free {
                         LabeledContent("Username / email") {
-                            TextField("", text: $appState.settings.languageToolUsername,
-                                      prompt: Text("your languagetoolplus.com account"))
+                            TextField("", text: $appState.settings.languageToolUsername)
                                 .labelsHidden().textFieldStyle(.plain).darkField()
                         }
                         LabeledContent("API token") {
@@ -127,33 +134,6 @@ struct ProvidersSettingsView: View {
                                 .labelsHidden().textFieldStyle(.plain).darkField()
                         }
                         Button("Save token") { appState.setLanguageToolToken(ltTokenDraft) }
-                        Text("Username and token come from your LanguageTool Premium account.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    case .selfHosted:
-                        LabeledContent("Server URL") {
-                            TextField("", text: $appState.settings.languageToolBaseURL,
-                                      prompt: Text("http://your-server:8081/v2"))
-                                .labelsHidden().textFieldStyle(.plain).darkField()
-                        }
-                        LabeledContent("Username (optional)") {
-                            TextField("", text: $appState.settings.languageToolUsername)
-                                .labelsHidden().textFieldStyle(.plain).darkField()
-                        }
-                        LabeledContent("API token (optional)") {
-                            SecureField("", text: $ltTokenDraft)
-                                .labelsHidden().textFieldStyle(.plain).darkField()
-                        }
-                        Button("Save token") { appState.setLanguageToolToken(ltTokenDraft) }
-                        Text("Point at your own LanguageTool server. Credentials are only needed if you put authentication in front of it.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    LabeledContent("Language") {
-                        Picker("", selection: $appState.settings.languageToolLanguage) {
-                            Text("Auto Detect").tag(AppLanguages.autoTag)
-                            ForEach(AppLanguages.list, id: \.code) { Text($0.name).tag($0.code) }
-                        }
-                        .labelsHidden().fixedSize()
                     }
 
                     HStack {
@@ -168,7 +148,7 @@ struct ProvidersSettingsView: View {
                         Text(ltStatus).font(.caption).foregroundStyle(.secondary)
                     }
                 } header: {
-                    helpHeader("Correct (LanguageTool)", "Pick how you reach LanguageTool. Free public needs no account. Premium uses api.languagetoolplus.com with your account username and token. Self-hosted points at your own server.")
+                    helpHeader("Correct (LanguageTool)", "How BindAll reaches LanguageTool.\n\nFree public: api.languagetool.org, no account, rate-limited, and your text is sent to languagetool.org. Credentials are never sent (the public server rejects them).\n\nPremium: api.languagetoolplus.com (a different host) with the username and token from your LanguageTool Premium account.\n\nSelf-hosted: your own server URL; username and token only if you put authentication in front of it.\n\nThe URL is pre-filled per mode but stays editable.")
                 }
             }
         }
