@@ -314,6 +314,65 @@ eq(ProofreadLanguage.disambiguateCyrillic("hello", candidate: "en", preferred: "
    "non-Cyrillic detection is left alone")
 eq(ProofreadLanguage.baseCode("en-US"), "en", "baseCode strips the region")
 
+print("WordBoundary")
+check(WordBoundary.wordRange(at: 2, in: "hello world") == NSRange(location: 0, length: 5),
+      "caret mid-word finds the word")
+check(WordBoundary.wordRange(at: 0, in: "hello world") == NSRange(location: 0, length: 5),
+      "caret at word start finds the word")
+check(WordBoundary.wordRange(at: 5, in: "hello world") == NSRange(location: 0, length: 5),
+      "caret at word end (right edge click) finds the word just ended")
+check(WordBoundary.wordRange(at: 6, in: "hello  world") == nil,
+      "caret in whitespace between words finds nothing")
+check(WordBoundary.wordRange(at: 0, in: "") == nil, "empty text finds nothing")
+check(WordBoundary.wordRange(at: 999, in: "hello") == NSRange(location: 0, length: 5),
+      "out-of-bounds caret is clamped to the end")
+check(WordBoundary.wordRange(at: 5, in: "a😉bad end") == NSRange(location: 3, length: 3),
+      "UTF-16 offsets stay correct past an emoji")
+check(WordBoundary.wordRange(at: 3, in: "привет мир") == NSRange(location: 0, length: 6),
+      "Cyrillic word found")
+check(WordBoundary.wordRange(at: 9, in: "привет мир") == NSRange(location: 7, length: 3),
+      "second Cyrillic word found")
+check(WordBoundary.wordRange(at: 3, in: "don't stop") == NSRange(location: 0, length: 5),
+      "apostrophe stays inside the word")
+// Foundation segments "cat.dog" as a single word (hostname-style); pin that behaviour.
+check(WordBoundary.wordRange(at: 4, in: "cat.dog") == NSRange(location: 0, length: 7),
+      "dotted compound is treated as one word")
+check(WordBoundary.wordRange(at: 3, in: "cat. dog") == NSRange(location: 0, length: 3),
+      "caret before a sentence dot picks the preceding word")
+
+print("IssueMerger.capReplacements")
+let capIssue = TextIssue(range: NSRange(location: 0, length: 4), kind: .spelling,
+                         shortMessage: "s", message: "m",
+                         replacements: ["one", "two", "three", "four", "five"],
+                         ruleId: nil, source: .languageTool, original: "orig")
+let capped = IssueMerger.capReplacements([capIssue], limit: 3)
+check(capped[0].replacements == ["one", "two", "three"], "cap 3 keeps the first three in order")
+check(capped[0].id == capIssue.id, "capping preserves identity")
+check(IssueMerger.capReplacements([capIssue], limit: 9)[0].replacements.count == 5,
+      "cap larger than the list keeps everything")
+check(IssueMerger.capReplacements([capIssue], limit: 0)[0].replacements == ["one"],
+      "limit below 1 is clamped to 1")
+check(IssueMerger.capReplacements([capIssue], limit: 99)[0].replacements.count == 5,
+      "limit above 10 is clamped to 10 (list shorter anyway)")
+
+print("Settings proofread keys")
+func decodeSettings(_ json: String) -> Settings {
+    try! JSONDecoder().decode(Settings.self, from: json.data(using: .utf8)!)
+}
+let sDefaults = decodeSettings("{}")
+check(sDefaults.proofreadAutoOnClick == true, "missing key defaults auto-on-click to true")
+check(sDefaults.proofreadMaxReplacements == 3, "missing key defaults max replacements to 3")
+let sLegacy = decodeSettings(#"{"proofreadAutoOnSelection": false}"#)
+check(sLegacy.proofreadAutoOnClick == false, "legacy proofreadAutoOnSelection key still honoured")
+let sBoth = decodeSettings(#"{"proofreadAutoOnSelection": false, "proofreadAutoOnClick": true}"#)
+check(sBoth.proofreadAutoOnClick == true, "new key wins over the legacy one")
+var sRound = Settings()
+sRound.proofreadAutoOnClick = false
+sRound.proofreadMaxReplacements = 7
+let sBack = try! JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(sRound))
+check(sBack.proofreadAutoOnClick == false && sBack.proofreadMaxReplacements == 7,
+      "encode/decode round-trip preserves the new keys")
+
 print("")
 if failures == 0 {
     print("ALL TESTS PASSED")

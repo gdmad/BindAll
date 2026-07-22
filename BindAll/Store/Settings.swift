@@ -130,7 +130,8 @@ struct Settings: Codable, Equatable {
     // Proofread behaviour. Whether it runs at all, its shortcut, the server and the language come
     // from the Correct settings below: it is the same action, reworked to step through the issues
     // instead of applying them all blindly.
-    var proofreadAutoOnSelection: Bool = true  // show the popup when a problem word is selected
+    var proofreadAutoOnClick: Bool = true      // show the popup when clicking inside a problem word
+    var proofreadMaxReplacements: Int = 3      // fixes listed per issue (1...10)
     var proofreadMinLength: Int = 12           // shortest text worth checking
     var proofreadAppMode: String = "all"       // "all" | "allow" | "deny"
     var proofreadApps: [String] = []           // bundle identifiers for allow/deny
@@ -183,11 +184,17 @@ extension Settings {
              restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteHorizontal,
              autocompleteFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
              autocompleteAcceptReturn, autocompleteAppMode, autocompleteApps,
-             proofreadAutoOnSelection, proofreadMinLength, proofreadAppMode, proofreadApps,
+             proofreadAutoOnClick, proofreadMaxReplacements,
+             proofreadMinLength, proofreadAppMode, proofreadApps,
              historyEnabled, sourceLanguage, targetLanguage,
              correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
              screenTranslateHotkey, quickTranslateHotkey
+    }
+
+    /// Old key names still honoured on decode (never written back).
+    private enum LegacyKeys: String, CodingKey {
+        case proofreadAutoOnSelection
     }
 
     init(from decoder: Decoder) throws {
@@ -210,7 +217,15 @@ extension Settings {
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteAcceptReturn) { autocompleteAcceptReturn = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .autocompleteAppMode) { autocompleteAppMode = v }
         if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteApps) { autocompleteApps = v }
-        if let v = try c.decodeIfPresent(Bool.self, forKey: .proofreadAutoOnSelection) { proofreadAutoOnSelection = v }
+        // proofreadAutoOnSelection is the legacy name of proofreadAutoOnClick; the new key wins.
+        if let v = try c.decodeIfPresent(Bool.self, forKey: .proofreadAutoOnClick) {
+            proofreadAutoOnClick = v
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
+                  let v = try legacy.decodeIfPresent(Bool.self, forKey: .proofreadAutoOnSelection) {
+            proofreadAutoOnClick = v
+        }
+        if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMaxReplacements) { proofreadMaxReplacements = v }
+        if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMaxReplacements) { proofreadMaxReplacements = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMinLength) { proofreadMinLength = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .proofreadAppMode) { proofreadAppMode = v }
         if let v = try c.decodeIfPresent([String].self, forKey: .proofreadApps) { proofreadApps = v }

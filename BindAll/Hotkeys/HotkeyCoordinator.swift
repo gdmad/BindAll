@@ -93,7 +93,8 @@ final class HotkeyCoordinator: ObservableObject {
         let s = appState.settings
         var cfg = ProofreadController.Config()
         cfg.enabled = s.correctEnabled
-        cfg.autoOnSelection = s.proofreadAutoOnSelection
+        cfg.autoOnClick = s.proofreadAutoOnClick
+        cfg.maxReplacements = s.proofreadMaxReplacements
         cfg.minLength = s.proofreadMinLength
         cfg.restoreClipboard = s.restoreClipboard
         cfg.appMode = ProofreadController.AppFilterMode(rawValue: s.proofreadAppMode) ?? .all

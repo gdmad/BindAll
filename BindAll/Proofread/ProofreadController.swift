@@ -6,7 +6,7 @@ import os
 ///
 /// Two ways in:
 ///   - the Proofread shortcut checks the whole field and starts at the first issue;
-///   - selecting a problem word with the mouse pops the fixes for it up on its own.
+///   - a single click inside a problem word pops the fixes for it up on its own.
 /// Either way the current issue is selected in the user's own field (`kAXSelectedTextRange`), so the
 /// highlight is drawn natively by the app and we never paint over anyone's text.
 ///
@@ -19,7 +19,8 @@ final class ProofreadController {
 
     struct Config {
         var enabled = false
-        var autoOnSelection = true
+        var autoOnClick = true
+        var maxReplacements = 3
         var minLength = 12
         var restoreClipboard = false
         var appMode = AppFilterMode.all
@@ -66,11 +67,11 @@ final class ProofreadController {
         }
     }
 
-    // Auto-popup on selection.
+    // Auto-popup on click.
     private var mouseMonitor: Any?
     private var appSwitchObserver: NSObjectProtocol?
-    private var selectionDebounce: DispatchWorkItem?
-    /// Selections longer than this are the user copying text, not fixing a word.
+    private var clickDebounce: DispatchWorkItem?
+    /// A double-click/drag selection longer than this is the user copying text, not fixing a word.
     private let maxAutoSelection = 40
 
     /// Set by the coordinator so a proofread session can silence autocomplete: both features eat Tab.
@@ -86,17 +87,17 @@ final class ProofreadController {
         self.provider = provider
         Task { await provider.configure(engine: engine, language: language) }
 
-        if config.enabled && config.autoOnSelection {
-            startSelectionMonitor()
+        if config.enabled && config.autoOnClick {
+            startClickMonitor()
         } else {
-            stopSelectionMonitor()
+            stopClickMonitor()
         }
         if !config.enabled { end() }
     }
 
     func stop() {
         end()
-        stopSelectionMonitor()
+        stopClickMonitor()
     }
 
     // MARK: - Entry points
@@ -126,16 +127,29 @@ final class ProofreadController {
         }
     }
 
-    /// Mouse-up: if the user selected a short piece of text, check the field and show the fixes for
-    /// whatever issue they landed on. Silent when there is nothing to say.
-    private func selectionChanged() {
-        guard config.enabled, config.autoOnSelection, AccessibilityPermission.isGranted, appAllowed() else { return }
+    /// Mouse-up: if the click landed inside a word (or double-clicked one), check the field and show
+    /// the fixes for whatever issue that word sits on. Silent when there is nothing to say.
+    private func clickedInText() {
+        guard config.enabled, config.autoOnClick, AccessibilityPermission.isGranted, appAllowed() else { return }
         guard case .axField(let found) = ProofreadAX.focus() else { return }
-        guard found.selection.length > 0, found.selection.length <= maxAutoSelection else { return }
         guard found.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= config.minLength else { return }
 
+        let probe: NSRange
+        if found.selection.length > 0 {
+            // Double-click or drag: reuse the selection when it is word-sized; a long selection is
+            // the user copying text, so stay quiet.
+            guard found.selection.length <= maxAutoSelection else { return }
+            probe = found.selection
+        } else if let word = WordBoundary.wordRange(at: found.caret, in: found.text) {
+            probe = word
+        } else {
+            // Clicked whitespace or an empty spot: the user moved on, close any open session.
+            if isSessionActive { end() }
+            return
+        }
+
         target = found
-        check(text: found.text, offset: 0, startAtFirst: false, selection: found.selection)
+        check(text: found.text, offset: 0, startAtFirst: false, selection: probe)
     }
 
     // MARK: - Checking
@@ -167,7 +181,8 @@ final class ProofreadController {
     }
 
     private func applyResults(_ found: [TextIssue], startAtFirst: Bool, selection: NSRange?) {
-        issues = found
+        // Cap once at the door so the popup, arrow navigation and accept all see the same list.
+        issues = IssueMerger.capReplacements(found, limit: config.maxReplacements)
 
         if startAtFirst {
             guard !issues.isEmpty else { flash("No issues found."); return }
@@ -207,7 +222,24 @@ final class ProofreadController {
         }
         popover.show(issue: issue, selected: selectedReplacement,
                      position: "\(currentIndex + 1) of \(issues.count)",
-                     topLeft: anchor(for: issue))
+                     topLeft: anchor(for: issue),
+                     onHover: { [weak self] index in self?.hoverReplacement(index) },
+                     onAccept: { [weak self] index in self?.acceptReplacement(index) })
+    }
+
+    /// Mouse hover over a row: mirror it into the keyboard selection.
+    private func hoverReplacement(_ index: Int) {
+        guard let issue = issues[safe: currentIndex], index >= 0, index < issue.replacements.count,
+              index != selectedReplacement else { return }
+        selectedReplacement = index
+        showCurrent(select: false)
+    }
+
+    /// Mouse click on a row: same path as selecting it with arrows and pressing Return.
+    private func acceptReplacement(_ index: Int) {
+        guard let issue = issues[safe: currentIndex], index >= 0, index < issue.replacements.count else { return }
+        selectedReplacement = index
+        accept()
     }
 
     private func move(_ delta: Int) {
@@ -354,17 +386,18 @@ final class ProofreadController {
         }
     }
 
-    // MARK: - Selection monitor
+    // MARK: - Click monitor
 
-    private func startSelectionMonitor() {
+    private func startClickMonitor() {
         guard mouseMonitor == nil else { return }
-        // A passive monitor, not a tap: it cannot delay the click.
+        // A passive monitor, not a tap: it cannot delay the click. Clicks on our own popup are
+        // dispatched to this app and never reach a global monitor, so they cannot retrigger us.
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
             guard let self else { return }
-            self.selectionDebounce?.cancel()
-            let work = DispatchWorkItem { [weak self] in self?.selectionChanged() }
-            self.selectionDebounce = work
-            // Let the app settle its selection before we read it.
+            self.clickDebounce?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.clickedInText() }
+            self.clickDebounce = work
+            // Let the app settle its caret/selection before we read it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
         appSwitchObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -374,13 +407,13 @@ final class ProofreadController {
         }
     }
 
-    private func stopSelectionMonitor() {
+    private func stopClickMonitor() {
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         mouseMonitor = nil
         if let appSwitchObserver { NSWorkspace.shared.notificationCenter.removeObserver(appSwitchObserver) }
         appSwitchObserver = nil
-        selectionDebounce?.cancel()
-        selectionDebounce = nil
+        clickDebounce?.cancel()
+        clickDebounce = nil
     }
 
     // MARK: - Helpers

@@ -12,6 +12,7 @@ swiftc -O \
     BindAll/Store/HistoryStore.swift \
     BindAll/Engines/AIEngine.swift \
     BindAll/Proofread/TextIssue.swift \
+    BindAll/Proofread/WordBoundary.swift \
     BindAll/Proofread/IssueMerger.swift \
     BindAll/Proofread/ProofreadCache.swift \
     BindAll/Proofread/ProofreadLanguage.swift \
