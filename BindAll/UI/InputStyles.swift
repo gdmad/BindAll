@@ -34,6 +34,15 @@ struct ClearFocusOnAppear: ViewModifier {
     }
 }
 
+/// Wraps a binding so writes land one runloop tick later. Text fields commit their text when they
+/// lose focus, and during a settings tab switch that happens inside the view update — writing a
+/// @Published-backed binding there logs "Publishing changes from within view updates". Use for any
+/// TextField/TextEditor bound to `appState.settings`.
+func deferredWrite<T>(_ source: Binding<T>) -> Binding<T> {
+    Binding(get: { source.wrappedValue },
+            set: { value in DispatchQueue.main.async { source.wrappedValue = value } })
+}
+
 extension View {
     /// Neutral dark box for a text field/editor (use with .textFieldStyle(.plain) and labelsHidden).
     func darkField() -> some View { modifier(DarkFieldStyle()) }

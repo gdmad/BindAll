@@ -193,6 +193,11 @@ struct ShortcutRecorder: View {
         isRecording = false
         pendingKeyCode = nil
         pendingCount = 0
-        appState.isRecordingShortcut = false
+        // Guarded and deferred: onDisappear runs inside the tab-switch view update, and an
+        // unconditional @Published assignment there logs "Publishing changes from within view
+        // updates" for every recorder being torn down.
+        if appState.isRecordingShortcut {
+            DispatchQueue.main.async { appState.isRecordingShortcut = false }
+        }
     }
 }

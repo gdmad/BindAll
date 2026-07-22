@@ -80,7 +80,7 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.correctEnabled) {
-                    helpHeader("Enable Proofread", "Adds a shortcut that checks the focused text field with a LanguageTool server and walks you through the issues one at a time: the word is selected in place and a list of fixes appears under it (arrows choose, Return applies, Tab skips, Esc exits). Set the shortcut on the Actions tab, the server in Providers, and the rest on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
+                    helpHeader("Enable Proofread", "Adds a shortcut that checks the focused text field with a LanguageTool server and walks you through the issues one at a time: the word is selected in place and a list of fixes appears under it (arrows choose, Return applies, Tab skips, Esc exits). Set the shortcut on the Actions tab; the server and everything else live on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
                 }
             } header: {
                 Text("Proofread (LanguageTool)")
@@ -142,7 +142,7 @@ struct ActionsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                TextEditor(text: $appState.settings.defaultPrompt)
+                TextEditor(text: deferredWrite($appState.settings.defaultPrompt))
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .frame(height: 90)
@@ -157,7 +157,7 @@ struct ActionsSettingsView: View {
 
             Section {
                 LabeledContent("Separator") {
-                    TextField("", text: $appState.settings.separator)
+                    TextField("", text: deferredWrite($appState.settings.separator))
                         .labelsHidden()
                         .textFieldStyle(.plain)
                         .darkField()

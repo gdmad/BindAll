@@ -14,7 +14,7 @@ struct ActionKeysSettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
                             Text("Key").foregroundStyle(.secondary)
-                            TextField("", text: binding(for: key.id).key, prompt: Text("key"))
+                            TextField("", text: deferredWrite(binding(for: key.id).key), prompt: Text("key"))
                                 .labelsHidden()
                                 .textFieldStyle(.plain)
                                 .multilineTextAlignment(.leading)
@@ -29,7 +29,7 @@ struct ActionKeysSettingsView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Instruction").foregroundStyle(.secondary)
-                            TextField("", text: binding(for: key.id).prompt,
+                            TextField("", text: deferredWrite(binding(for: key.id).prompt),
                                       prompt: Text("Describe the action for the AI…"), axis: .vertical)
                                 .labelsHidden()
                                 .textFieldStyle(.plain)
