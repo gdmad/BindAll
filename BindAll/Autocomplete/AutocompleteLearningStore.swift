@@ -44,7 +44,8 @@ final class AutocompleteLearningStore {
     /// Bundled seed bigrams (Russian only) used as a final next-word backoff. Read-only.
     private var seedBigrams: [String: [String: Int]] = [:]
     private let fileURL: URL
-    private let maxWords = 5000
+    /// Pending debounced save; guarded by `lock`.
+    private var saveDebounce: DispatchWorkItem?
 
     init(fileURL: URL? = nil) {
         if let fileURL {
@@ -80,7 +81,7 @@ final class AutocompleteLearningStore {
     func record(word: String, prev1: String?, prev2: String?) {
         let w = word.lowercased()
         guard w.count >= 2, w.allSatisfy({ $0.isLetter }) else { return }
-        let snapshot = withLock { () -> Model in
+        withLock {
             model.wordCounts[w, default: 0] += 1
             if let p1 = prev1, !p1.isEmpty {
                 model.bigrams[p1.lowercased(), default: [:]][w, default: 0] += 1
@@ -88,10 +89,10 @@ final class AutocompleteLearningStore {
                     model.trigrams[Self.trigramKey(p2, p1), default: [:]][w, default: 0] += 1
                 }
             }
-            pruneLocked()
-            return model
         }
-        persist(snapshot)
+        // The vocabulary is unbounded, so the file grows with use; a debounced save keeps a fast
+        // typist from re-encoding the whole model on every single word.
+        persistSoon()
     }
 
     /// Words typed/accepted fewer than this many times haven't been confirmed as real words yet
@@ -177,13 +178,6 @@ final class AutocompleteLearningStore {
 
     // MARK: - Persistence
 
-    /// Caps the learned-word map. Caller must already hold `lock`.
-    private func pruneLocked() {
-        guard model.wordCounts.count > maxWords else { return }
-        let kept = model.wordCounts.sorted { $0.value > $1.value }.prefix(maxWords)
-        model.wordCounts = Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value) })
-    }
-
     private func load() {
         guard let data = try? Data(contentsOf: fileURL),
               let decoded = try? JSONDecoder().decode(Model.self, from: data) else { return }
@@ -194,6 +188,37 @@ final class AutocompleteLearningStore {
     /// blocks typing on disk I/O. Writes are serialized on `ioQueue`.
     private func persist(_ snapshot: Model) {
         ioQueue.async { [fileURL] in
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    /// Schedules a save ~2 s out, coalescing with any save already pending.
+    private func persistSoon() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let snapshot = self.withLock { self.model }
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: self.fileURL, options: .atomic)
+        }
+        withLock {
+            saveDebounce?.cancel()
+            saveDebounce = work
+        }
+        ioQueue.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    /// Writes any pending debounced state synchronously. Call on app termination so the last few
+    /// learned words are not lost.
+    func flush() {
+        let pending = withLock { () -> DispatchWorkItem? in
+            defer { saveDebounce = nil }
+            return saveDebounce
+        }
+        guard pending != nil else { return }
+        pending?.cancel()
+        let snapshot = withLock { model }
+        ioQueue.sync { [fileURL] in
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
             try? data.write(to: fileURL, options: .atomic)
         }

@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func applicationWillTerminate(_ notification: Notification) {
         coordinator.stop()
+        AutocompleteLearningStore.shared.flush() // save any words learned in the debounce window
     }
 
     /// The pair does not matter; issuing any status query at launch is what warms the availability
