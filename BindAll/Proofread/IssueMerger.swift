@@ -45,6 +45,18 @@ enum IssueMerger {
         return out
     }
 
+    /// Trims each issue's replacement list to `limit` (clamped to 1...10), keeping the best-first
+    /// order. Applied once when issues are stored, so the popup, keyboard navigation and accept all
+    /// see the same list.
+    static func capReplacements(_ issues: [TextIssue], limit: Int) -> [TextIssue] {
+        let cap = max(1, min(10, limit))
+        return issues.map { issue in
+            var capped = issue
+            capped.replacements = Array(issue.replacements.prefix(cap))
+            return capped
+        }
+    }
+
     /// Updates `issues` after `replacedRange` was replaced by text of `replacementUTF16Length`.
     /// Issues before the edit are untouched, issues after it slide, and issues that overlap the edit
     /// (including the one that was just applied) are dropped: their text no longer exists.

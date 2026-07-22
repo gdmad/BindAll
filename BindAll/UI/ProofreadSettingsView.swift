@@ -10,13 +10,15 @@ struct ProofreadSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: $appState.settings.proofreadAutoOnSelection) {
-                    helpHeader("Show fixes when I select a word", "Select a word with a problem and the list of fixes appears under it, with no shortcut. Long selections are ignored, so selecting a paragraph to copy it stays quiet.")
+                Toggle(isOn: $appState.settings.proofreadAutoOnClick) {
+                    helpHeader("Show fixes when I click a word", "Click inside a word with a problem and the list of fixes appears under it, with no shortcut. Double-clicking a word works too; long selections are ignored, so selecting a paragraph to copy it stays quiet.")
                 }
+                Stepper("Fixes shown per issue: \(appState.settings.proofreadMaxReplacements)",
+                        value: $appState.settings.proofreadMaxReplacements, in: 1...10)
                 Stepper("Check text longer than: \(appState.settings.proofreadMinLength) characters",
                         value: $appState.settings.proofreadMinLength, in: 1...100)
             } header: {
-                helpHeader("Proofread", "Press the Proofread shortcut in any text field: BindAll checks the whole field with LanguageTool, selects the first problem and shows the fixes under it. Arrows choose, Return applies, Tab skips to the next one, Esc exits. Skipped in password fields.")
+                helpHeader("Proofread", "Press the Proofread shortcut in any text field: BindAll checks the whole field with LanguageTool, selects the first problem and shows the fixes under it. Arrows or the mouse choose, Return or a click applies, Tab skips to the next one, Esc exits. Skipped in password fields.")
             }
 
             Section {

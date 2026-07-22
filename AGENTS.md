@@ -49,7 +49,8 @@ BindAll/
 │   ├── LanguageToolProofreadProvider.swift # actor: paragraph-scoped checks + cache
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
 │   ├── IssueApplier.swift             # validated single fix: AX write, else select+paste
-│   └── ProofreadController.swift      # session, key tap (only while the popup is up), auto-popup
+│   ├── WordBoundary.swift             # word range under the caret (click-to-proofread trigger)
+│   └── ProofreadController.swift      # session, key tap (only while the popup is up), click popup
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
@@ -79,8 +80,10 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Shift+Cmd+E** → Quick Translate window
 - **Shift+Cmd+C** → **Proofread** (LanguageTool), only when enabled in Settings → General. Checks the
   whole focused field (read over AX; nothing needs to be selected), selects the first problem **in the
-  field itself** and shows the fixes under it: arrows choose, Return applies, Tab skips, Esc exits.
-  Selecting a short problem word also pops the fixes up on its own, with no shortcut.
+  field itself** and shows the fixes under it: arrows or mouse hover choose, Return or a click
+  applies, Tab skips, Esc exits. The number of fixes listed per issue is a setting (1-10, default 3).
+  A single click inside a problem word (or double-clicking one) also pops the fixes up on its own,
+  with no shortcut.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (off by default; enable on General, configure on the Autocomplete

@@ -11,14 +11,17 @@ final class ProofreadPopover {
     private var panel: NSPanel?
 
     /// Shows `issue`'s fixes with `selected` highlighted, anchored so its top-left sits at `topLeft`
-    /// (AppKit screen coordinates).
-    func show(issue: TextIssue, selected: Int, position: String, topLeft: NSPoint) {
+    /// (AppKit screen coordinates). `onHover`/`onAccept` receive the row index the mouse is on.
+    func show(issue: TextIssue, selected: Int, position: String, topLeft: NSPoint,
+              onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
                                original: issue.original,
                                kind: issue.kind,
                                replacements: issue.replacements,
                                selected: selected,
-                               position: position)
+                               position: position,
+                               onHover: onHover,
+                               onAccept: onAccept)
         present(AnyView(view), at: topLeft)
     }
 
@@ -32,11 +35,11 @@ final class ProofreadPopover {
     }
 
     private func present(_ view: AnyView, at topLeft: NSPoint) {
-        let host = NSHostingController(rootView: view)
+        let host = FirstMouseHostingView(rootView: view)
         let panel = self.panel ?? makePanel()
-        panel.contentViewController = host
+        panel.contentView = host
         panel.layoutIfNeeded()
-        let size = host.view.fittingSize
+        let size = host.fittingSize
         panel.setContentSize(size)
         panel.setFrameOrigin(clamp(NSPoint(x: topLeft.x, y: topLeft.y - size.height), size: size))
         panel.orderFront(nil) // NOT makeKey: the text field must keep focus.
@@ -49,7 +52,7 @@ final class ProofreadPopover {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.level = .floating
-        panel.ignoresMouseEvents = true // keyboard-driven; clicks belong to the app underneath
+        panel.ignoresMouseEvents = false // rows accept hover and click-to-apply
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
@@ -69,6 +72,12 @@ final class ProofreadPopover {
     }
 }
 
+/// The panel is never key, so any click on it is a "first mouse"; accept it so a single click on a
+/// row applies the fix instead of just trying (and failing) to focus the panel.
+private final class FirstMouseHostingView: NSHostingView<AnyView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 // MARK: - Views
 
 private struct PopoverView: View {
@@ -79,6 +88,8 @@ private struct PopoverView: View {
     let selected: Int
     /// e.g. "2 of 7"
     let position: String
+    let onHover: (Int) -> Void
+    let onAccept: (Int) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -106,6 +117,10 @@ private struct PopoverView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(Array(replacements.enumerated()), id: \.offset) { index, word in
                         row(word, isSelected: index == selected)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onAccept(index) }
+                            // The guard avoids a hover -> re-render -> hover feedback loop.
+                            .onHover { inside in if inside && index != selected { onHover(index) } }
                     }
                 }
                 .padding(.bottom, 2)
