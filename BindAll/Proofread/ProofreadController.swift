@@ -30,6 +30,7 @@ final class ProofreadController {
     private var config = Config()
     private var provider: LanguageToolProofreadProvider?
     private let popover = ProofreadPopover()
+    private let underlines = UnderlineOverlay()
 
     // Session state.
     private var target: ProofTarget?
@@ -184,6 +185,10 @@ final class ProofreadController {
         // Cap once at the door so the popup, arrow navigation and accept all see the same list.
         issues = IssueMerger.capReplacements(found, limit: config.maxReplacements)
 
+        if !issues.isEmpty, let element = target?.element {
+            underlines.show(issues: issues, element: element)
+        }
+
         if startAtFirst {
             guard !issues.isEmpty else { flash("No issues found."); return }
             focusIssue(0)
@@ -271,6 +276,16 @@ final class ProofreadController {
             // actually replaced -- relocate may have moved it from the stored issue.range.
             issues = IssueMerger.shift(issues, replacedRange: replacedRange,
                                        replacementUTF16Length: (replacement as NSString).length)
+            // Redraw the underlines from the shifted ranges, but only after the write has landed:
+            // the paste path applies asynchronously (0.05-0.3 s), so measuring bounds immediately
+            // would capture pre-paste geometry.
+            underlines.hide()
+            let gen = generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, gen == self.generation, self.isSessionActive,
+                      let element = self.target?.element else { return }
+                self.underlines.show(issues: self.issues, element: element)
+            }
             if currentIndex >= issues.count { currentIndex = issues.count - 1 }
             if issues.isEmpty { flash("No issues left."); return }
             focusIssue(max(0, currentIndex))
@@ -290,6 +305,7 @@ final class ProofreadController {
         selectedReplacement = 0
         target = nil
         popover.hide()
+        underlines.hide()
         setActive(false)
     }
 

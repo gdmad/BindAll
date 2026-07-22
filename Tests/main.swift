@@ -309,6 +309,35 @@ check(shifted[0].range == NSRange(location: 2, length: 2),
 check(shifted[1].range == NSRange(location: 22, length: 3),
       "issue after the applied range slides by the exact delta")
 
+print("UnderlineGeometry")
+// Quartz -> AppKit flip. Primary screen 1000 pt tall; a rect whose top is 100 from the top ends up
+// with its bottom at 1000 - 120 = 880 in AppKit coordinates.
+let flipped = UnderlineGeometry.appKitRect(fromQuartz: CGRect(x: 10, y: 100, width: 50, height: 20),
+                                           primaryScreenHeight: 1000)
+check(flipped == CGRect(x: 10, y: 880, width: 50, height: 20), "quartz rect flips to AppKit")
+// A window on a taller secondary display can have a negative AppKit y; the formula must not clamp.
+let below = UnderlineGeometry.appKitRect(fromQuartz: CGRect(x: 0, y: 1190, width: 10, height: 20),
+                                         primaryScreenHeight: 1000)
+check(below.origin.y == -210, "conversion is unclamped for secondary-display geometry")
+
+let squiggle = UnderlineGeometry.squigglePoints(width: 10, amplitude: 2, wavelength: 4)
+check(squiggle.first == CGPoint(x: 0, y: 0), "squiggle starts at x = 0, baseline")
+check(squiggle.last?.x == 10, "squiggle ends at x = width")
+check(zip(squiggle, squiggle.dropFirst()).allSatisfy { $0.x < $1.x }, "x is strictly increasing")
+check(squiggle.allSatisfy { $0.y == 0 || $0.y == 2 }, "y alternates between 0 and amplitude")
+check(UnderlineGeometry.squigglePoints(width: 0, amplitude: 2, wavelength: 4).count == 2,
+      "degenerate width yields just the endpoints")
+
+check(UnderlineGeometry.isSingleLine(rangeRect: CGRect(x: 0, y: 0, width: 100, height: 16),
+                                     probeRect: CGRect(x: 0, y: 0, width: 8, height: 16)),
+      "equal heights are single-line")
+check(!UnderlineGeometry.isSingleLine(rangeRect: CGRect(x: 0, y: 0, width: 100, height: 32),
+                                      probeRect: CGRect(x: 0, y: 0, width: 8, height: 16)),
+      "a doubled height (wrapped range) is not single-line")
+check(!UnderlineGeometry.isSingleLine(rangeRect: CGRect(x: 0, y: 0, width: 100, height: 16),
+                                      probeRect: .zero),
+      "a zero probe rect is rejected")
+
 print("TextSegmenter.paragraphs")
 func tiles(_ ps: [Paragraph], _ text: String) -> Bool {
     var next = 0

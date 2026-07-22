@@ -115,6 +115,15 @@ enum ProofreadAX {
     /// Electron and web fields) fall back to the element frame, and the feature still works -- the
     /// popup is just placed less precisely. `primaryHeight` must be read on the main thread.
     static func wordAnchor(for range: NSRange, in element: AXUIElement, primaryHeight: CGFloat?) -> NSPoint? {
+        guard let rect = boundsForRange(range, in: element) else { return nil }
+        // Quartz top-left origin -> AppKit bottom-left.
+        let base = primaryHeight ?? rect.maxY
+        return NSPoint(x: rect.minX, y: base - rect.maxY)
+    }
+
+    /// Screen bounds of `range` (Quartz, top-left origin); nil when the app does not answer or
+    /// answers with an empty rect (many Electron and web fields).
+    static func boundsForRange(_ range: NSRange, in element: AXUIElement) -> CGRect? {
         var cfRange = CFRange(location: range.location, length: max(1, range.length))
         guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return nil }
         var boundsRef: AnyObject?
@@ -124,14 +133,20 @@ enum ProofreadAX {
         guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect), rect.width > 0 || rect.height > 0 else {
             return nil
         }
-        // Quartz top-left origin -> AppKit bottom-left.
-        let base = primaryHeight ?? rect.maxY
-        return NSPoint(x: rect.minX, y: base - rect.maxY)
+        return rect
     }
 
     /// Bottom-left of the element's frame in AppKit screen coordinates, for placing the panel.
     /// `primaryHeight` must be read on the main thread (NSScreen is not safe elsewhere).
     static func frameAnchor(for element: AXUIElement, primaryHeight: CGFloat?) -> NSPoint? {
+        guard let rect = frame(of: element) else { return nil }
+        // Quartz top-left origin -> AppKit bottom-left.
+        let base = primaryHeight ?? rect.maxY
+        return NSPoint(x: rect.minX, y: base - rect.maxY)
+    }
+
+    /// The element's screen frame (Quartz, top-left origin).
+    static func frame(of element: AXUIElement) -> CGRect? {
         var posRef: AnyObject?
         var sizeRef: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
@@ -143,8 +158,6 @@ enum ProofreadAX {
         guard AXValueGetValue(posRef as! AXValue, .cgPoint, &pos),
               AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
               size.width > 0, size.height > 0 else { return nil }
-        // Quartz top-left origin -> AppKit bottom-left.
-        let base = primaryHeight ?? (pos.y + size.height)
-        return NSPoint(x: pos.x, y: base - (pos.y + size.height))
+        return CGRect(origin: pos, size: size)
     }
 }

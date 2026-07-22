@@ -50,6 +50,8 @@ BindAll/
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
 │   ├── IssueApplier.swift             # validated single fix: AX write, else verified select+paste
 │   ├── WordBoundary.swift             # word range under the caret (click-to-proofread trigger)
+│   ├── UnderlineGeometry.swift        # pure geometry: rect flip, squiggle path, line check
+│   ├── UnderlineOverlay.swift         # click-through panel with squiggles under all found issues
 │   └── ProofreadController.swift      # session, key tap (only while the popup is up), click popup
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
@@ -84,7 +86,8 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   field itself** and shows the fixes under it: arrows or mouse hover choose, Return or a click
   applies, Tab skips, Esc exits. The number of fixes listed per issue is a setting (1-10, default 3).
   A single click inside a problem word (or double-clicking one) also pops the fixes up on its own,
-  with no shortcut.
+  with no shortcut. All found issues are underlined in the field (kind-colored squiggles) while the
+  session is active; scrolling, typing or switching apps hides the underlines.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (off by default; enable on General, configure on the Autocomplete
