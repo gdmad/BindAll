@@ -18,21 +18,7 @@ struct ProofreadSettingsView: View {
                 Stepper("Check text longer than: \(appState.settings.proofreadMinLength) characters",
                         value: $appState.settings.proofreadMinLength, in: 1...100)
             } header: {
-                helpHeader("Proofread", "Press the Proofread shortcut in any text field: BindAll checks the whole field with LanguageTool, selects the first problem and shows the fixes under it. Arrows or the mouse choose, Return or a click applies, Tab skips to the next one, Esc exits. Skipped in password fields.")
-            }
-
-            Section {
-                LabeledContent("Server") {
-                    Text(serverLabel).foregroundStyle(.secondary)
-                }
-                LabeledContent("Language") {
-                    Text(languageLabel).foregroundStyle(.secondary)
-                }
-                Text("Set both on the Providers tab. The whole field is sent, one paragraph at a time, so LanguageTool sees enough context to catch grammar rather than just unknown words. Unchanged paragraphs are cached and not sent again.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("LanguageTool")
+                helpHeader("Proofread", "Press the Proofread shortcut in any text field: BindAll checks the whole field with LanguageTool, selects the first problem and shows the fixes under it. Arrows or the mouse choose, Return or a click applies, Tab skips to the next one, Esc exits. Skipped in password fields.\n\nThe server and language are set on the Providers tab. The whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
             }
 
             Section {
@@ -66,18 +52,6 @@ struct ProofreadSettingsView: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    private var serverLabel: String {
-        let url = appState.settings.languageToolBaseURL.trimmingCharacters(in: .whitespaces)
-        guard !url.isEmpty else { return "Not set" }
-        let host = URL(string: url)?.host ?? url
-        return host == "api.languagetool.org" ? "\(host) (public)" : host
-    }
-
-    private var languageLabel: String {
-        let code = appState.settings.languageToolLanguage
-        return code == "auto" ? "Auto-detect" : AppLanguages.name(for: code)
     }
 
     private func appName(_ bundleID: String) -> String {

@@ -9,8 +9,12 @@ struct ProvidersSettingsView: View {
     @State private var isTesting = false
     @State private var models: [String] = []
 
-    // LanguageTool ("Correct") connection state.
+    // LanguageTool ("Correct") connection state. URL and username are edited via drafts (like the
+    // API key): a TextField bound straight to `appState.settings` commits its text while SwiftUI is
+    // switching tabs, publishing a change from within a view update.
     @State private var ltTokenDraft: String = ""
+    @State private var ltURLDraft: String = ""
+    @State private var ltUsernameDraft: String = ""
     @State private var ltStatus: String = ""
     @State private var ltOK: Bool?
     @State private var ltTesting = false
@@ -106,17 +110,23 @@ struct ProvidersSettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: appState.settings.languageToolMode) { _, mode in
-                        // Pre-fill the URL for the chosen mode; the field stays editable. Deferred to
-                        // the next runloop tick so we do not publish a change to `settings` from
-                        // within the view update that is committing the mode change.
+                        // A stale test verdict is misleading once the mode changed.
+                        ltStatus = ""
+                        ltOK = nil
+                        // Pre-fill the URL for the chosen mode; the field stays editable. The draft's
+                        // own onChange forwards it into settings on the next runloop tick.
                         guard let url = mode.defaultURL else { return }
-                        DispatchQueue.main.async { appState.settings.languageToolBaseURL = url }
+                        ltURLDraft = url
                     }
 
                     LabeledContent("Server URL") {
-                        TextField("", text: $appState.settings.languageToolBaseURL,
+                        TextField("", text: $ltURLDraft,
                                   prompt: Text("https://api.languagetool.org/v2"))
                             .labelsHidden().textFieldStyle(.plain).darkField()
+                            .onChange(of: ltURLDraft) { _, url in
+                                // Deferred: onChange fires inside the view update.
+                                DispatchQueue.main.async { appState.settings.languageToolBaseURL = url }
+                            }
                     }
                     LabeledContent("Language") {
                         Picker("", selection: $appState.settings.languageToolLanguage) {
@@ -129,8 +139,11 @@ struct ProvidersSettingsView: View {
                     // Credentials only matter for Premium (required) and self-hosted with auth (optional).
                     if appState.settings.languageToolMode != .free {
                         LabeledContent("Username / email") {
-                            TextField("", text: $appState.settings.languageToolUsername)
+                            TextField("", text: $ltUsernameDraft)
                                 .labelsHidden().textFieldStyle(.plain).darkField()
+                                .onChange(of: ltUsernameDraft) { _, name in
+                                    DispatchQueue.main.async { appState.settings.languageToolUsername = name }
+                                }
                         }
                         LabeledContent("API token") {
                             SecureField("", text: $ltTokenDraft)
@@ -163,9 +176,13 @@ struct ProvidersSettingsView: View {
     private func loadForSelection() {
         apiKeyDraft = appState.apiKey(for: selectedKind)
         ltTokenDraft = appState.languageToolToken()
+        ltURLDraft = appState.settings.languageToolBaseURL
+        ltUsernameDraft = appState.settings.languageToolUsername
         models = []
         testStatus = ""
         testOK = nil
+        ltStatus = ""
+        ltOK = nil
     }
 
     private func testLanguageTool() {

@@ -17,7 +17,7 @@ struct SettingsView: View {
                 .tabItem { Label("Proofread", systemImage: "text.magnifyingglass") }
         }
         .padding(.top, 8)
-        .frame(minWidth: 560, idealWidth: 680, minHeight: 478, idealHeight: 560)
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 478, idealHeight: 558)
     }
 }
 
