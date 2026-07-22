@@ -372,6 +372,48 @@ sRound.proofreadMaxReplacements = 7
 let sBack = try! JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(sRound))
 check(sBack.proofreadAutoOnClick == false && sBack.proofreadMaxReplacements == 7,
       "encode/decode round-trip preserves the new keys")
+print("LanguageToolMode.defaultURL")
+eq(LanguageToolMode.free.defaultURL ?? "", "https://api.languagetool.org/v2", "free presets the public URL")
+eq(LanguageToolMode.premium.defaultURL ?? "", "https://api.languagetoolplus.com/v2", "premium presets the plus URL")
+check(LanguageToolMode.selfHosted.defaultURL == nil, "self-hosted has no preset")
+
+print("Settings.languageToolConnection")
+var s = Settings()
+s.languageToolUsername = "me@x.com"
+s.languageToolBaseURL = "http://home.lan:8081/v2"
+
+s.languageToolMode = .free
+let free = s.languageToolConnection(token: "secret")
+eq(free.baseURL, "http://home.lan:8081/v2", "free uses the (editable) stored URL")
+check(free.username.isEmpty && free.apiKey.isEmpty, "free never sends credentials, even if filled in")
+
+s.languageToolMode = .premium
+let prem = s.languageToolConnection(token: "secret")
+eq(prem.baseURL, "http://home.lan:8081/v2", "premium uses the stored URL")
+eq(prem.username, "me@x.com", "premium sends the username")
+eq(prem.apiKey, "secret", "premium sends the token")
+
+s.languageToolMode = .selfHosted
+let selfh = s.languageToolConnection(token: "secret")
+eq(selfh.baseURL, "http://home.lan:8081/v2", "self-hosted uses the user URL")
+eq(selfh.apiKey, "secret", "self-hosted forwards the token when present")
+
+print("Settings default and resilient decoding")
+func decode(_ json: String) -> Settings {
+    try! JSONDecoder().decode(Settings.self, from: Data(json.utf8))
+}
+check(decode("{}").languageToolMode == .free, "mode defaults to free when absent (no migration)")
+check(decode("{\"languageToolMode\":\"premium\"}").languageToolMode == .premium, "a stored mode is kept")
+
+print("LanguageToolEngine.authParams")
+let loneUser = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", apiKey: "")
+check(loneUser["username"] == nil && loneUser["apiKey"] == nil, "lone username is dropped (would 400)")
+let loneKey = LanguageToolEngine.authParams(["text": "x"], username: "", apiKey: "abc")
+check(loneKey["apiKey"] == nil, "lone apiKey is dropped")
+let pair = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", apiKey: "abc")
+check(pair["username"] == "me@x.com" && pair["apiKey"] == "abc", "a full pair is attached")
+check(LanguageToolEngine.authParams(["text": "x"], username: "", apiKey: "")["text"] == "x",
+      "original params survive")
 
 print("")
 if failures == 0 {

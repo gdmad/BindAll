@@ -101,6 +101,18 @@ struct ProvidersSettingsView: View {
 
             if appState.settings.correctEnabled {
                 Section {
+                    Picker("Account type", selection: $appState.settings.languageToolMode) {
+                        ForEach(LanguageToolMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: appState.settings.languageToolMode) { _, mode in
+                        // Pre-fill the URL for the chosen mode; the field stays editable. Deferred to
+                        // the next runloop tick so we do not publish a change to `settings` from
+                        // within the view update that is committing the mode change.
+                        guard let url = mode.defaultURL else { return }
+                        DispatchQueue.main.async { appState.settings.languageToolBaseURL = url }
+                    }
+
                     LabeledContent("Server URL") {
                         TextField("", text: $appState.settings.languageToolBaseURL,
                                   prompt: Text("https://api.languagetool.org/v2"))
@@ -113,15 +125,20 @@ struct ProvidersSettingsView: View {
                         }
                         .labelsHidden().fixedSize()
                     }
-                    LabeledContent("Username / email") {
-                        TextField("", text: $appState.settings.languageToolUsername)
-                            .labelsHidden().textFieldStyle(.plain).darkField()
+
+                    // Credentials only matter for Premium (required) and self-hosted with auth (optional).
+                    if appState.settings.languageToolMode != .free {
+                        LabeledContent("Username / email") {
+                            TextField("", text: $appState.settings.languageToolUsername)
+                                .labelsHidden().textFieldStyle(.plain).darkField()
+                        }
+                        LabeledContent("API token") {
+                            SecureField("", text: $ltTokenDraft)
+                                .labelsHidden().textFieldStyle(.plain).darkField()
+                        }
+                        Button("Save token") { appState.setLanguageToolToken(ltTokenDraft) }
                     }
-                    LabeledContent("API token") {
-                        SecureField("", text: $ltTokenDraft)
-                            .labelsHidden().textFieldStyle(.plain).darkField()
-                    }
-                    Button("Save token") { appState.setLanguageToolToken(ltTokenDraft) }
+
                     HStack {
                         Button(ltTesting ? "Testing…" : "Test connection") { testLanguageTool() }
                             .disabled(ltTesting)
@@ -134,7 +151,7 @@ struct ProvidersSettingsView: View {
                         Text(ltStatus).font(.caption).foregroundStyle(.secondary)
                     }
                 } header: {
-                    helpHeader("Correct (LanguageTool)", "Username and token are only for LanguageTool Premium; the public and self-hosted servers need just the URL. The public server is rate-limited and sends text to languagetool.org.")
+                    helpHeader("Correct (LanguageTool)", "How BindAll reaches LanguageTool.\n\nFree public: api.languagetool.org, no account, rate-limited, and your text is sent to languagetool.org. Credentials are never sent (the public server rejects them).\n\nPremium: api.languagetoolplus.com (a different host) with the username and token from your LanguageTool Premium account.\n\nSelf-hosted: your own server URL; username and token only if you put authentication in front of it.\n\nThe URL is pre-filled per mode but stays editable.")
                 }
             }
         }

@@ -97,6 +97,36 @@ struct HotkeyConfig: Codable, Hashable {
     static let correct = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
 }
 
+// MARK: - LanguageTool connection
+
+/// How BindAll reaches LanguageTool. The three ways need different fields, and mixing them up is the
+/// usual source of trouble: the free public server rejects any credentials (HTTP 400), while Premium
+/// lives on a *different* host and requires them. Making the mode explicit lets the UI show only the
+/// relevant fields and lets the resolver never send credentials where they do not belong.
+enum LanguageToolMode: String, Codable, CaseIterable {
+    case free
+    case premium
+    case selfHosted
+
+    var displayName: String {
+        switch self {
+        case .free: return "Free public"
+        case .premium: return "Premium"
+        case .selfHosted: return "Self-hosted"
+        }
+    }
+
+    /// The URL pre-filled when the user picks this mode; nil for self-hosted (keeps the current URL).
+    /// The field stays editable, so this is only a starting point.
+    var defaultURL: String? {
+        switch self {
+        case .free: return "https://api.languagetool.org/v2"
+        case .premium: return "https://api.languagetoolplus.com/v2"
+        case .selfHosted: return nil
+        }
+    }
+}
+
 // MARK: - Root settings
 
 struct Settings: Codable, Equatable {
@@ -147,10 +177,24 @@ struct Settings: Codable, Equatable {
     // Correct (LanguageTool): a separate, optional action with its own shortcut. The token (if any)
     // lives in the Keychain; only non-secret config is stored here.
     var correctEnabled: Bool = false
-    var languageToolBaseURL: String = "https://api.languagetool.org/v2"
-    var languageToolUsername: String = ""           // Premium only (account email)
+    var languageToolMode: LanguageToolMode = .free
+    var languageToolBaseURL: String = "https://api.languagetool.org/v2"  // used only in self-hosted mode
+    var languageToolUsername: String = ""           // Premium / self-hosted with auth (account email)
     var languageToolLanguage: String = "auto"        // BCP-47 code or "auto"
     var correctHotkey: HotkeyConfig = .correct
+
+    /// The base URL, username and apiKey to actually put on the wire, resolved from the mode.
+    /// Free never sends credentials (the public server rejects them); Premium always does; self-hosted
+    /// sends them only if provided. `token` is read from the Keychain by the caller.
+    func languageToolConnection(token: String) -> (baseURL: String, username: String, apiKey: String) {
+        switch languageToolMode {
+        case .free:
+            // The public server rejects credentials, so never send them regardless of the fields.
+            return (languageToolBaseURL, "", "")
+        case .premium, .selfHosted:
+            return (languageToolBaseURL, languageToolUsername, token)
+        }
+    }
 
     // Providers
     /// When set, the OpenRouter model list (Fetch) shows only free models.
@@ -187,7 +231,7 @@ extension Settings {
              proofreadAutoOnClick, proofreadMaxReplacements,
              proofreadMinLength, proofreadAppMode, proofreadApps,
              historyEnabled, sourceLanguage, targetLanguage,
-             correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
+             correctEnabled, languageToolMode, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
              screenTranslateHotkey, quickTranslateHotkey
     }
@@ -236,6 +280,7 @@ extension Settings {
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolBaseURL) { languageToolBaseURL = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolUsername) { languageToolUsername = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolLanguage) { languageToolLanguage = v }
+        if let v = try c.decodeIfPresent(LanguageToolMode.self, forKey: .languageToolMode) { languageToolMode = v }
         if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .correctHotkey) { correctHotkey = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .openRouterFreeOnly) { openRouterFreeOnly = v }
         if let v = try c.decodeIfPresent([ProviderConfig].self, forKey: .providers) { providers = v }

@@ -117,10 +117,17 @@ count for that key is reached (only counts with a larger sibling wait out the ti
   it reads the sentence, so it finds agreement and punctuation rather than just unknown words.
   (`NSSpellChecker` was tried as an offline layer and dropped -- its Russian guesses are poor: for
   "Прувет" it offers "Прусте"/"Пруте", never "Привет". Harper is English-only and Apple's
-  FoundationModels does not support Russian at all, so neither is an option here.) The server, language
-  and Premium token (Keychain) are configured under Providers; the same settings drive it and the
-  legacy `correct()` path. Text is sent one paragraph at a time and cached by paragraph text, so
-  editing one sentence costs one request and re-checking costs none.
+  FoundationModels does not support Russian at all, so neither is an option here.) The same settings
+  drive it and the legacy `correct()` path. Text is sent one paragraph at a time and cached by
+  paragraph text, so editing one sentence costs one request and re-checking costs none.
+  The connection is configured under Providers via an explicit **connection mode**
+  (`LanguageToolMode`): **Free public** (`api.languagetool.org`, no credentials -- the public server
+  rejects them with HTTP 400), **Premium** (`api.languagetoolplus.com`, a different host, requires
+  username + token), or **Self-hosted** (your own URL, optional credentials).
+  `Settings.languageToolConnection(token:)` resolves the real endpoint and only puts credentials on
+  the wire where they belong; `LanguageToolEngine.authParams` is a final guard that never sends a
+  lone username or apiKey. The Premium token lives in the Keychain. The URL is pre-filled per mode
+  but stays editable; there is no settings migration (mode defaults to Free).
 - **Writing results back:** the frontmost app is captured when an action starts; the result is pasted
   with Cmd+V (reliable across native and Electron/Chromium apps). If focus moved to another app while
   the engine worked, the original app is re-activated first so the result lands where it started.

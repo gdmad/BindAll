@@ -188,42 +188,6 @@ final class AutocompleteLearningStore {
         guard let data = try? Data(contentsOf: fileURL),
               let decoded = try? JSONDecoder().decode(Model.self, from: data) else { return }
         model = decoded
-        normalizeCase()
-    }
-
-    /// One-time cleanup of pre-existing data: lowercase non-pinned learned words and all n-gram "next"
-    /// values so case variants merge. Pinned custom words (count >= 1_000_000) keep their case.
-    private func normalizeCase() {
-        func lowerNextValues(_ dict: [String: [String: Int]]) -> (result: [String: [String: Int]], changed: Bool) {
-            var out: [String: [String: Int]] = [:]
-            var changed = false
-            for (key, inner) in dict {
-                var merged: [String: Int] = [:]
-                for (word, count) in inner {
-                    let lw = word.lowercased()
-                    if lw != word { changed = true }
-                    merged[lw, default: 0] += count
-                }
-                out[key] = merged
-            }
-            return (out, changed)
-        }
-
-        var changed = false
-        var counts: [String: Int] = [:]
-        for (word, count) in model.wordCounts {
-            let key = count >= 1_000_000 ? word : word.lowercased()
-            if key != word { changed = true }
-            counts[key, default: 0] += count
-        }
-        model.wordCounts = counts
-
-        let (bg, bgChanged) = lowerNextValues(model.bigrams)
-        model.bigrams = bg
-        let (tg, tgChanged) = lowerNextValues(model.trigrams)
-        model.trigrams = tg
-
-        if changed || bgChanged || tgChanged { persist(model) }
     }
 
     /// Encodes `snapshot` and writes it atomically off the caller's thread, so learning a word never
