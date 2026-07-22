@@ -1,9 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// Settings for proofreading. The on/off switch is on General, the shortcut on the Actions tab, and the
-/// server and language in Providers: this is the Correct action reworked, not a second feature, so it
-/// shares that configuration rather than duplicating it.
+/// Settings for proofreading, including the LanguageTool connection (LanguageTool serves only this
+/// feature). The on/off switch is on General and the shortcut on the Actions tab.
 struct ProofreadSettingsView: View {
     @EnvironmentObject var appState: AppState
 
@@ -18,8 +17,10 @@ struct ProofreadSettingsView: View {
                 Stepper("Check text longer than: \(appState.settings.proofreadMinLength) characters",
                         value: $appState.settings.proofreadMinLength, in: 1...100)
             } header: {
-                helpHeader("Proofread", "Press the Proofread shortcut in any text field: BindAll checks the whole field with LanguageTool, selects the first problem and shows the fixes under it. Arrows or the mouse choose, Return or a click applies, Tab skips to the next one, Esc exits. Skipped in password fields.\n\nThe server and language are set on the Providers tab. The whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
+                helpHeader("Proofread", "Press the Proofread shortcut in any text field: BindAll checks the whole field with LanguageTool, selects the first problem and shows the fixes under it. Arrows or the mouse choose, Return or a click applies, Tab skips to the next one, Esc exits. Skipped in password fields.\n\nThe whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
             }
+
+            LanguageToolConnectionSection()
 
             Section {
                 Picker("Check in", selection: $appState.settings.proofreadAppMode) {

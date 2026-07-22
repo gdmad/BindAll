@@ -9,15 +9,7 @@ struct ProvidersSettingsView: View {
     @State private var isTesting = false
     @State private var models: [String] = []
 
-    // LanguageTool ("Correct") connection state. URL and username are edited via drafts (like the
-    // API key): a TextField bound straight to `appState.settings` commits its text while SwiftUI is
-    // switching tabs, publishing a change from within a view update.
-    @State private var ltTokenDraft: String = ""
-    @State private var ltURLDraft: String = ""
-    @State private var ltUsernameDraft: String = ""
-    @State private var ltStatus: String = ""
-    @State private var ltOK: Bool?
-    @State private var ltTesting = false
+    @State private var testTask: Task<Void, Never>?
 
     private var cloudKinds: [ProviderKind] {
         ProviderKind.allCases.filter { $0 != .apple }
@@ -52,10 +44,10 @@ struct ProvidersSettingsView: View {
                     }
                 }
                 LabeledContent("Base URL") {
-                    TextField("", text: Binding(
+                    TextField("", text: deferredWrite(Binding(
                         get: { configBinding.wrappedValue.baseURLOverride ?? "" },
                         set: { var c = configBinding.wrappedValue; c.baseURLOverride = $0.isEmpty ? nil : $0; configBinding.wrappedValue = c }
-                    ), prompt: Text(selectedKind.defaultBaseURL ?? ""))
+                    )), prompt: Text(selectedKind.defaultBaseURL ?? ""))
                     .labelsHidden()
                     .textFieldStyle(.plain)
                     .darkField()
@@ -63,10 +55,10 @@ struct ProvidersSettingsView: View {
 
                 LabeledContent("Model") {
                     HStack {
-                        TextField("", text: Binding(
+                        TextField("", text: deferredWrite(Binding(
                             get: { configBinding.wrappedValue.model },
                             set: { var c = configBinding.wrappedValue; c.model = $0; configBinding.wrappedValue = c }
-                        ))
+                        )))
                         .labelsHidden()
                         .textFieldStyle(.plain)
                         .darkField()
@@ -103,104 +95,25 @@ struct ProvidersSettingsView: View {
                 }
             }
 
-            if appState.settings.correctEnabled {
-                Section {
-                    Picker("Account type", selection: $appState.settings.languageToolMode) {
-                        ForEach(LanguageToolMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: appState.settings.languageToolMode) { _, mode in
-                        // A stale test verdict is misleading once the mode changed.
-                        ltStatus = ""
-                        ltOK = nil
-                        // Pre-fill the URL for the chosen mode; the field stays editable. The draft's
-                        // own onChange forwards it into settings on the next runloop tick.
-                        guard let url = mode.defaultURL else { return }
-                        ltURLDraft = url
-                    }
-
-                    LabeledContent("Server URL") {
-                        TextField("", text: $ltURLDraft,
-                                  prompt: Text("https://api.languagetool.org/v2"))
-                            .labelsHidden().textFieldStyle(.plain).darkField()
-                            .onChange(of: ltURLDraft) { _, url in
-                                // Deferred: onChange fires inside the view update.
-                                DispatchQueue.main.async { appState.settings.languageToolBaseURL = url }
-                            }
-                    }
-                    LabeledContent("Language") {
-                        Picker("", selection: $appState.settings.languageToolLanguage) {
-                            Text("Auto Detect").tag(AppLanguages.autoTag)
-                            ForEach(AppLanguages.list, id: \.code) { Text($0.name).tag($0.code) }
-                        }
-                        .labelsHidden().fixedSize()
-                    }
-
-                    // Credentials only matter for Premium (required) and self-hosted with auth (optional).
-                    if appState.settings.languageToolMode != .free {
-                        LabeledContent("Username / email") {
-                            TextField("", text: $ltUsernameDraft)
-                                .labelsHidden().textFieldStyle(.plain).darkField()
-                                .onChange(of: ltUsernameDraft) { _, name in
-                                    DispatchQueue.main.async { appState.settings.languageToolUsername = name }
-                                }
-                        }
-                        LabeledContent("API token") {
-                            SecureField("", text: $ltTokenDraft)
-                                .labelsHidden().textFieldStyle(.plain).darkField()
-                        }
-                        Button("Save token") { appState.setLanguageToolToken(ltTokenDraft) }
-                    }
-
-                    HStack {
-                        Button(ltTesting ? "Testing…" : "Test connection") { testLanguageTool() }
-                            .disabled(ltTesting)
-                        if let ltOK {
-                            Image(systemName: ltOK ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(ltOK ? .green : .red)
-                        }
-                    }
-                    if !ltStatus.isEmpty {
-                        Text(ltStatus).font(.caption).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    helpHeader("Correct (LanguageTool)", "How BindAll reaches LanguageTool.\n\nFree public: api.languagetool.org, no account, rate-limited, and your text is sent to languagetool.org. Credentials are never sent (the public server rejects them).\n\nPremium: api.languagetoolplus.com (a different host) with the username and token from your LanguageTool Premium account.\n\nSelf-hosted: your own server URL; username and token only if you put authentication in front of it.\n\nThe URL is pre-filled per mode but stays editable.")
-                }
-            }
         }
         .formStyle(.grouped)
         .clearFocusOnAppear()
         .onAppear { loadForSelection() }
+        .onDisappear {
+            // A verdict must not survive a tab switch, and an in-flight test must not surface later.
+            testTask?.cancel()
+            testTask = nil
+            isTesting = false
+            testStatus = ""
+            testOK = nil
+        }
     }
 
     private func loadForSelection() {
         apiKeyDraft = appState.apiKey(for: selectedKind)
-        ltTokenDraft = appState.languageToolToken()
-        ltURLDraft = appState.settings.languageToolBaseURL
-        ltUsernameDraft = appState.settings.languageToolUsername
         models = []
         testStatus = ""
         testOK = nil
-        ltStatus = ""
-        ltOK = nil
-    }
-
-    private func testLanguageTool() {
-        appState.setLanguageToolToken(ltTokenDraft)
-        ltTesting = true
-        ltStatus = ""
-        ltOK = nil
-        let engine = EngineFactory.makeLanguageTool(appState: appState)
-        Task {
-            do {
-                ltStatus = try await engine.testConnection()
-                ltOK = true
-            } catch {
-                ltStatus = error.localizedDescription
-                ltOK = false
-            }
-            ltTesting = false
-        }
     }
 
     private func testConnection() {
@@ -211,12 +124,14 @@ struct ProvidersSettingsView: View {
         testStatus = ""
         testOK = nil
         let engine = EngineFactory.make(kind: selectedKind, appState: appState)
-        Task {
+        testTask = Task {
             do {
                 let status = try await engine.testConnection()
+                guard !Task.isCancelled else { return }
                 testOK = true
                 testStatus = status
             } catch {
+                guard !Task.isCancelled else { return }
                 testOK = false
                 testStatus = error.localizedDescription
             }

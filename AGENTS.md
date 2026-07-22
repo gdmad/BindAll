@@ -59,7 +59,8 @@ BindAll/
 │   ├── SettingsView.swift      # tabs: General, Actions, Providers, Autocomplete, Proofread (Translation and Shortcuts live inside General/Actions)
 │   ├── AutocompleteSettingsView.swift  # autocomplete tab (count, layout, language, learning, per-app)
 │   ├── ActionKeysSettingsView.swift
-│   ├── ProvidersSettingsView.swift
+│   ├── ProvidersSettingsView.swift     # AI providers (keys, models)
+│   ├── LanguageToolConnectionSection.swift # LT mode/URL/credentials block on the Proofread tab
 │   ├── HistoryPanelView.swift  # History list shown as a popover from the menu bar (click = copy)
 │   └── PopupController.swift   # floating NSPanel for translation/results (Copy/Close)
 └── Store/
@@ -120,7 +121,7 @@ count for that key is reached (only counts with a larger sibling wait out the ti
   FoundationModels does not support Russian at all, so neither is an option here.) The same settings
   drive it and the legacy `correct()` path. Text is sent one paragraph at a time and cached by
   paragraph text, so editing one sentence costs one request and re-checking costs none.
-  The connection is configured under Providers via an explicit **connection mode**
+  The connection is configured on the Proofread tab via an explicit **connection mode**
   (`LanguageToolMode`): **Free public** (`api.languagetool.org`, no credentials -- the public server
   rejects them with HTTP 400), **Premium** (`api.languagetoolplus.com`, a different host, requires
   username + token), or **Self-hosted** (your own URL, optional credentials).
