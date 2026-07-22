@@ -38,9 +38,17 @@ struct TextIssue: Identifiable, Equatable {
     /// The substring at `range` when the check ran. `IssueApplier` compares it against the field's
     /// current contents to detect that the text moved or changed before applying anything.
     var original: String
+    /// UTF-16 units of surrounding text captured on each side of `range` at check time.
+    static let contextSpan = 12
+    /// Text immediately before/after `range` when the check ran (up to `contextSpan` UTF-16 units,
+    /// clipped at the checked paragraph's edges). Used by `IssueMerger.relocate` to tell identical
+    /// occurrences of the same word apart. Deliberately excluded from `identity`.
+    var contextBefore: String
+    var contextAfter: String
 
     init(range: NSRange, kind: IssueKind, shortMessage: String, message: String,
-         replacements: [String], ruleId: String?, source: IssueSource, original: String) {
+         replacements: [String], ruleId: String?, source: IssueSource, original: String,
+         contextBefore: String = "", contextAfter: String = "") {
         self.id = Self.identity(source: source, ruleId: ruleId, range: range, original: original)
         self.range = range
         self.kind = kind
@@ -50,13 +58,16 @@ struct TextIssue: Identifiable, Equatable {
         self.ruleId = ruleId
         self.source = source
         self.original = original
+        self.contextBefore = contextBefore
+        self.contextAfter = contextAfter
     }
 
     /// Rebuilds an issue with a new range, keeping everything else. Used when ranges shift after an
     /// applied fix, or when paragraph-local ranges are rebased into document coordinates.
     func withRange(_ newRange: NSRange) -> TextIssue {
         TextIssue(range: newRange, kind: kind, shortMessage: shortMessage, message: message,
-                  replacements: replacements, ruleId: ruleId, source: source, original: original)
+                  replacements: replacements, ruleId: ruleId, source: source, original: original,
+                  contextBefore: contextBefore, contextAfter: contextAfter)
     }
 
     static func identity(source: IssueSource, ruleId: String?, range: NSRange, original: String) -> String {

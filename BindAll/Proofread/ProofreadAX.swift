@@ -79,6 +79,27 @@ enum ProofreadAX {
         return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
     }
 
+    /// The element's current selection range, or nil when the attribute is unreadable. Used to
+    /// confirm that a select() actually took before pasting over the "selection".
+    static func selectedRange(of element: AXUIElement) -> NSRange? {
+        var rangeRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success else {
+            return nil
+        }
+        var cfRange = CFRange()
+        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &cfRange) else { return nil }
+        return NSRange(location: cfRange.location, length: cfRange.length)
+    }
+
+    /// The element's current selected text, or nil when the attribute is unreadable.
+    static func selectedText(of element: AXUIElement) -> String? {
+        var textRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &textRef) == .success else {
+            return nil
+        }
+        return textRef as? String
+    }
+
     /// Whether the element lets us write text straight into the selection (the clean, in-place path).
     static func canSetSelectedText(_ element: AXUIElement) -> Bool {
         var settable = DarwinBoolean(false)

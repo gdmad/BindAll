@@ -110,6 +110,8 @@ struct LanguageToolEngine: Equatable {
             let range = NSRange(location: m.offset, length: m.length)
             guard NSMaxRange(range) <= ns.length else { return nil }
             let short = m.shortMessage.isEmpty ? m.message : m.shortMessage
+            let beforeStart = max(0, range.location - TextIssue.contextSpan)
+            let afterEnd = min(ns.length, NSMaxRange(range) + TextIssue.contextSpan)
             return TextIssue(
                 range: range,
                 kind: kind(for: m),
@@ -118,7 +120,11 @@ struct LanguageToolEngine: Equatable {
                 replacements: m.replacements,
                 ruleId: m.ruleId,
                 source: .languageTool,
-                original: ns.substring(with: range)
+                original: ns.substring(with: range),
+                contextBefore: ns.substring(with: NSRange(location: beforeStart,
+                                                          length: range.location - beforeStart)),
+                contextAfter: ns.substring(with: NSRange(location: NSMaxRange(range),
+                                                         length: afterEnd - NSMaxRange(range)))
             )
         }
     }

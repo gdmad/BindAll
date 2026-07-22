@@ -5,9 +5,11 @@ import ApplicationServices
 @MainActor
 enum IssueApplier {
     enum Result {
-        /// The fix landed; `range` is where the replacement now sits.
-        case applied(range: NSRange)
-        /// The text moved or changed under us; nothing was written. Re-check before retrying.
+        /// The fix landed. `replacedRange` is where the ORIGINAL text sat when it was replaced
+        /// (after relocation), so the caller can shift the remaining issue ranges from it.
+        case applied(replacedRange: NSRange)
+        /// The text moved or changed under us; nothing was (knowingly) written twice. Re-check
+        /// before retrying.
         case stale
         case failed(String)
     }
@@ -25,10 +27,12 @@ enum IssueApplier {
         // untouched, so this is the path to prefer wherever the app allows it.
         if ProofreadAX.canSetSelectedText(element), ProofreadAX.select(range, in: element) {
             if AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString,
-                                            replacement as CFString) == .success,
-               verify(element: element, at: range.location, equals: replacement) {
-                return .applied(range: NSRange(location: range.location,
-                                               length: (replacement as NSString).length))
+                                            replacement as CFString) == .success {
+                // The write claimed success. Never fall through to the paste path from here: if the
+                // app actually wrote the text, pasting would apply the fix twice.
+                return verify(element: element, at: range.location, equals: replacement)
+                    ? .applied(replacedRange: range)
+                    : .stale
             }
         }
 
@@ -37,9 +41,18 @@ enum IssueApplier {
         guard ProofreadAX.select(range, in: element) else {
             return .failed("This app does not support in-place fixes.")
         }
-        NSRunningApplication(processIdentifier: pid)?.activate()
-        TextInjector.replaceSelection(with: replacement, restorePrevious: restoreClipboard)
-        return .applied(range: NSRange(location: range.location, length: (replacement as NSString).length))
+        // select() returning success does not mean the selection took (Chromium can no-op): read it
+        // back before pasting, or Cmd+V would land at the caret instead of over the issue.
+        if let selected = ProofreadAX.selectedRange(of: element), selected != range { return .stale }
+        if let selectedText = ProofreadAX.selectedText(of: element), selectedText != issue.original {
+            return .stale
+        }
+        // The paste itself is fire-and-forget (it lands ~0.05-0.3 s later); FocusTarget re-activates
+        // the app first and waits longer when it was not frontmost.
+        TextInjector.replaceSelection(with: replacement, restorePrevious: restoreClipboard,
+                                      target: TextInjector.FocusTarget(
+                                          app: NSRunningApplication(processIdentifier: pid)))
+        return .applied(replacedRange: range)
     }
 
     /// Confirms Path A actually wrote the text: some elements report success and change nothing.

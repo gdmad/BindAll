@@ -43,12 +43,12 @@ BindAll/
 │   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
 ├── Proofread/                  # step through LanguageTool's findings one at a time
 │   ├── TextIssue.swift                # shared issue model (UTF-16 ranges, stable ids)
-│   ├── IssueMerger.swift              # merge/shift/relocate/firstIssue -- pure range algebra
+│   ├── IssueMerger.swift              # merge/shift/context-checked relocate/firstIssue -- pure range algebra
 │   ├── ProofreadCache.swift           # paragraph segmentation + per-paragraph issue cache
 │   ├── ProofreadLanguage.swift        # language resolution; ru/uk disambiguation for "auto"
 │   ├── LanguageToolProofreadProvider.swift # actor: paragraph-scoped checks + cache
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
-│   ├── IssueApplier.swift             # validated single fix: AX write, else select+paste
+│   ├── IssueApplier.swift             # validated single fix: AX write, else verified select+paste
 │   ├── WordBoundary.swift             # word range under the caret (click-to-proofread trigger)
 │   └── ProofreadController.swift      # session, key tap (only while the popup is up), click popup
 ├── Actions/

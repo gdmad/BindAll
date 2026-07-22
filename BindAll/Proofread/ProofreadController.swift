@@ -189,17 +189,16 @@ final class ProofreadController {
             focusIssue(0)
             return
         }
-        // Auto path: only speak up if the selection landed on an issue.
+        // Auto path: only speak up if the clicked word landed on an issue.
         guard let selection, let issue = IssueMerger.firstIssue(in: issues, overlapping: selection),
               let index = issues.firstIndex(where: { $0.id == issue.id }) else {
             end()
             return
         }
-        // Do not move the user's selection here: they made it themselves.
-        currentIndex = index
-        selectedReplacement = 0
-        showCurrent(select: false)
-        setActive(true)
+        // Select the issue natively (like the shortcut path) so the user sees exactly what will be
+        // replaced before accepting. Safe re-entrancy: the click monitor reacts only to real
+        // mouse-ups, and an AX selection write generates none.
+        focusIssue(index)
     }
 
     // MARK: - Session
@@ -266,10 +265,11 @@ final class ProofreadController {
 
         switch IssueApplier.apply(issue, replacement: replacement, element: target.element,
                                   pid: target.pid, restoreClipboard: config.restoreClipboard) {
-        case .applied:
+        case .applied(let replacedRange):
             // Slide the remaining ranges locally instead of re-checking: the server round trip would
-            // cost a second per fix, and the arithmetic is exact.
-            issues = IssueMerger.shift(issues, replacedRange: issue.range,
+            // cost a second per fix, and the arithmetic is exact. Shift from the range the applier
+            // actually replaced -- relocate may have moved it from the stored issue.range.
+            issues = IssueMerger.shift(issues, replacedRange: replacedRange,
                                        replacementUTF16Length: (replacement as NSString).length)
             if currentIndex >= issues.count { currentIndex = issues.count - 1 }
             if issues.isEmpty { flash("No issues left."); return }

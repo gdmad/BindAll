@@ -257,6 +257,58 @@ check(IssueMerger.relocate(teh, in: "the cat sat on the mat and teh dog", window
       "a match far outside the window is not used")
 check(IssueMerger.relocate(issue(0, 0, original: ""), in: "abc") == nil, "empty original never relocates")
 
+print("TextIssue context capture")
+let ctxIssues = LanguageToolEngine.issues(
+    from: [LTMatch(offset: 4, length: 3, message: "m", shortMessage: "s", replacements: ["the"],
+                   ruleId: "R", issueType: "misspelling", categoryId: "TYPOS")],
+    text: "one teh two")
+eq(ctxIssues[0].contextBefore, "one ", "context before captured (clipped at text start)")
+eq(ctxIssues[0].contextAfter, " two", "context after captured (clipped at text end)")
+let ctxMoved = ctxIssues[0].withRange(NSRange(location: 14, length: 3))
+eq(ctxMoved.contextBefore, "one ", "withRange preserves contextBefore")
+eq(ctxMoved.contextAfter, " two", "withRange preserves contextAfter")
+check(ctxIssues[0].id == TextIssue(range: NSRange(location: 4, length: 3), kind: .spelling,
+                                   shortMessage: "s", message: "m", replacements: ["the"],
+                                   ruleId: "R", source: .languageTool, original: "teh").id,
+      "identity does not depend on context")
+
+print("IssueMerger.relocate with context")
+// Build an issue the way the engine does, from the text it was checked against.
+func ctxIssue(in text: String, location: Int, length: Int) -> TextIssue {
+    LanguageToolEngine.issues(
+        from: [LTMatch(offset: location, length: length, message: "", shortMessage: "",
+                       replacements: [], ruleId: nil, issueType: nil, categoryId: nil)],
+        text: text)[0]
+}
+// Two identical words; a prefix edit shifted everything. Context picks the right occurrence.
+let dogTeh = ctxIssue(in: "teh cat teh dog", location: 8, length: 3)
+check(IssueMerger.relocate(dogTeh, in: "X teh cat teh dog") == NSRange(location: 10, length: 3),
+      "context relocates the right one of two identical words after a prefix edit")
+// A different identical occurrence now sits at the old offset; context still finds the true one.
+let aaTail = ctxIssue(in: "start aa end", location: 6, length: 2)
+check(IssueMerger.relocate(aaTail, in: "aa xx start aa end") == NSRange(location: 12, length: 2),
+      "context rejects a wrong identical word at a shifted position")
+// The only occurrence in the window has completely different surroundings: refuse.
+check(IssueMerger.relocate(dogTeh, in: "xxxxxxxx teh yyyyy") == nil,
+      "a single occurrence with zero context agreement is stale (was wrongly accepted before)")
+// Identical contexts on both candidates: genuinely ambiguous.
+check(IssueMerger.relocate(ctxIssue(in: "ab teh cd", location: 3, length: 3),
+                           in: "x ab teh cd ab teh cd") == nil,
+      "two candidates with identical contexts stay ambiguous")
+// Unchanged text with context still resolves to the same spot.
+check(IssueMerger.relocate(dogTeh, in: "teh cat teh dog") == NSRange(location: 8, length: 3),
+      "unchanged text with context relocates to the same range")
+
+print("IssueMerger.shift by the applied range")
+// The applier replaced at the RELOCATED range (10), not the stale stored one (4).
+let shiftInput = [issue(2, 2, original: "aa"), issue(20, 3, original: "bbb")]
+let shifted = IssueMerger.shift(shiftInput, replacedRange: NSRange(location: 10, length: 3),
+                                replacementUTF16Length: 5)
+check(shifted[0].range == NSRange(location: 2, length: 2),
+      "issue before the applied range is untouched")
+check(shifted[1].range == NSRange(location: 22, length: 3),
+      "issue after the applied range slides by the exact delta")
+
 print("TextSegmenter.paragraphs")
 func tiles(_ ps: [Paragraph], _ text: String) -> Bool {
     var next = 0

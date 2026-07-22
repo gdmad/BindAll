@@ -76,35 +76,76 @@ enum IssueMerger {
     /// Finds where `issue.original` sits in `text` now.
     ///
     /// The user can keep typing while the panel is open, so by the time they click a fix the text may
-    /// have moved. Returns the range only when it is unambiguous: either the text is still exactly
-    /// where it was, or there is exactly one occurrence within `window` UTF-16 units of the old spot.
-    /// Anything else returns nil, and the caller must re-check rather than guess.
+    /// have moved. When the issue carries a context snapshot, every candidate occurrence within
+    /// `window` UTF-16 units is scored by how much of its surroundings still match that snapshot --
+    /// this is what tells two identical words apart. Without context (legacy issues), the old rule
+    /// applies: the exact old position, else a single unambiguous occurrence. Anything ambiguous
+    /// returns nil, and the caller must re-check rather than guess.
     static func relocate(_ issue: TextIssue, in text: String, window: Int = 64) -> NSRange? {
         let ns = text as NSString
         let original = issue.original as NSString
         guard original.length > 0 else { return nil }
 
-        if NSMaxRange(issue.range) <= ns.length,
-           ns.substring(with: issue.range) == issue.original {
-            return issue.range
-        }
+        let oldRangeValid = NSMaxRange(issue.range) <= ns.length
+            && ns.substring(with: issue.range) == issue.original
+        let hasContext = !issue.contextBefore.isEmpty || !issue.contextAfter.isEmpty
 
+        if oldRangeValid && !hasContext { return issue.range }
+
+        // Collect every occurrence in the window (plus the old range, which may sit outside it).
         let start = max(0, issue.range.location - window)
         let end = min(ns.length, NSMaxRange(issue.range) + window)
-        guard start < end else { return nil }
-        let search = NSRange(location: start, length: end - start)
-
-        var found: NSRange?
-        var cursor = search
-        while cursor.length > 0 {
-            let hit = ns.range(of: issue.original, options: [.literal], range: cursor)
-            guard hit.location != NSNotFound else { break }
-            if found != nil { return nil } // ambiguous
-            found = hit
-            let next = NSMaxRange(hit)
-            cursor = NSRange(location: next, length: max(0, NSMaxRange(search) - next))
+        var candidates: [NSRange] = []
+        if start < end {
+            var cursor = NSRange(location: start, length: end - start)
+            while cursor.length > 0 {
+                let hit = ns.range(of: issue.original, options: [.literal], range: cursor)
+                guard hit.location != NSNotFound else { break }
+                candidates.append(hit)
+                let next = NSMaxRange(hit)
+                cursor = NSRange(location: next, length: max(0, end - next))
+            }
         }
-        return found
+        if oldRangeValid && !candidates.contains(issue.range) { candidates.append(issue.range) }
+
+        guard !candidates.isEmpty else { return nil }
+        guard hasContext else {
+            return candidates.count == 1 ? candidates[0] : nil // legacy: unique hit or bail
+        }
+
+        let scored = candidates.map { (range: $0, score: contextScore($0, in: ns, issue: issue)) }
+        let best = scored.max { $0.score < $1.score }!
+        // A word's neighbours are usually spaces, and a space matches almost anywhere -- so demand a
+        // few real characters of agreement (or all of it, when the snapshot itself is that short).
+        let available = (issue.contextBefore as NSString).length + (issue.contextAfter as NSString).length
+        guard best.score >= min(4, available), best.score > 0 else { return nil }
+        let winners = scored.filter { $0.score == best.score }
+        if winners.count == 1 { return winners[0].range }
+        // Tie: trust the unmoved position if it is among the winners, otherwise it is ambiguous.
+        if oldRangeValid, winners.contains(where: { $0.range == issue.range }) { return issue.range }
+        return nil
+    }
+
+    /// How many contiguous UTF-16 units around `candidate` still match the issue's context snapshot
+    /// (suffix-aligned before the range, prefix-aligned after it).
+    private static func contextScore(_ candidate: NSRange, in ns: NSString, issue: TextIssue) -> Int {
+        var score = 0
+        let before = issue.contextBefore as NSString
+        var i = 0
+        while i < before.length, candidate.location - 1 - i >= 0,
+              ns.character(at: candidate.location - 1 - i)
+                == before.character(at: before.length - 1 - i) {
+            score += 1
+            i += 1
+        }
+        let after = issue.contextAfter as NSString
+        var j = 0
+        while j < after.length, NSMaxRange(candidate) + j < ns.length,
+              ns.character(at: NSMaxRange(candidate) + j) == after.character(at: j) {
+            score += 1
+            j += 1
+        }
+        return score
     }
 
     /// The first issue that overlaps `selection`, for the popup shown when the user selects a word.
