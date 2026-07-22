@@ -254,10 +254,12 @@ final class AutocompleteController {
         let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
         if keyCode == kVK_Tab || (isReturn && snap.acceptReturn) {
             let index = snap.selectedIndex
+            invalidateSuppression() // a second fast Tab must not be consumed against the accepted popup
             DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
             return nil
         }
         if keyCode == kVK_Escape {
+            invalidateSuppression()
             DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
             return nil
         }
@@ -272,8 +274,20 @@ final class AutocompleteController {
         // Any other key isn't part of the nav set: close the popup now (it touches UI, so on main)
         // instead of waiting for the monitor's onKey boundary handling to catch up, but let the key
         // through so it still reaches the field (and the monitor, which builds the next word).
+        // Kill the snapshot synchronously too: a fast Tab right after this key must NOT be consumed
+        // and accepted against a stale `partial` (that duplicated the just-typed letter).
+        invalidateSuppression()
         DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
         return Unmanaged.passUnretained(event)
+    }
+
+    /// Tap-thread side: marks the suggestion dead immediately, so a key arriving before main has
+    /// processed the matching clearSuggestion()/accept() is never matched against stale state. A
+    /// later syncSuppression() on main rewrites the snapshot unconditionally, so no re-arm hazard.
+    private func invalidateSuppression() {
+        os_unfair_lock_lock(&suppressionLock)
+        suppression.hasSuggestion = false
+        os_unfair_lock_unlock(&suppressionLock)
     }
 
     /// Reads the tap-thread suppression snapshot under the lock.
