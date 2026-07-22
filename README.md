@@ -55,7 +55,7 @@ No Dock icon: BindAll lives in the menu bar (`LSUIElement`).
 
 ## Default shortcuts
 
-All shortcuts are configurable in Settings → Shortcuts.
+All shortcuts are configurable in Settings → Actions → Shortcuts.
 
 | Shortcut | Action |
 |---|---|

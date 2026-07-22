@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Settings for proofreading. The on/off switch is on General, the shortcut in Shortcuts, and the
+/// Settings for proofreading. The on/off switch is on General, the shortcut on the Actions tab, and the
 /// server and language in Providers: this is the Correct action reworked, not a second feature, so it
 /// shares that configuration rather than duplicating it.
 struct ProofreadSettingsView: View {

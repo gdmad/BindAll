@@ -56,7 +56,7 @@ BindAll/
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
 │   └── MaskAISlop.swift        # typography normalizer (dashes/quotes/emoji)
 ├── UI/
-│   ├── SettingsView.swift      # tabs: General, Actions, Providers, Translation, Hotkeys, Autocomplete
+│   ├── SettingsView.swift      # tabs: General, Actions, Providers, Autocomplete, Proofread (Translation and Shortcuts live inside General/Actions)
 │   ├── AutocompleteSettingsView.swift  # autocomplete tab (count, layout, language, learning, per-app)
 │   ├── ActionKeysSettingsView.swift
 │   ├── ProvidersSettingsView.swift
@@ -73,7 +73,7 @@ Tests/
 Info.plist                      # LSUIElement, version (source of truth for version)
 ```
 
-## Triggers (defaults, all configurable in Settings → Shortcuts)
+## Triggers (defaults, all configurable in Settings → Actions → Shortcuts)
 - **Cmd+C ×2** → default action: fix spelling/grammar, or run a custom prompt (separator / action key)
 - **Cmd+C ×3** → translate the selection, shown in a popup near the cursor
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
