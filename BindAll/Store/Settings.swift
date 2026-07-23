@@ -93,8 +93,6 @@ struct HotkeyConfig: Codable, Hashable {
     static let translate = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true), repeatCount: 3)
     static let screenTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true), repeatCount: 1)
     static let quickTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
-    /// Proofread (LanguageTool): Cmd+Shift+C by default.
-    static let correct = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
 }
 
 // MARK: - LanguageTool connection
@@ -174,14 +172,13 @@ struct Settings: Codable, Equatable {
     var sourceLanguage: String = "auto"   // BCP-47 code or "auto"
     var targetLanguage: String = "en"     // BCP-47 code
 
-    // Correct (LanguageTool): a separate, optional action with its own shortcut. The token (if any)
-    // lives in the Keychain; only non-secret config is stored here.
+    // Proofread (LanguageTool): optional, has no shortcut -- it checks as you type. The token (if
+    // any) lives in the Keychain; only non-secret config is stored here.
     var correctEnabled: Bool = false
     var languageToolMode: LanguageToolMode = .free
     var languageToolBaseURL: String = "https://api.languagetool.org/v2"  // used only in self-hosted mode
     var languageToolUsername: String = ""           // Premium / self-hosted with auth (account email)
     var languageToolLanguage: String = "auto"        // BCP-47 code or "auto"
-    var correctHotkey: HotkeyConfig = .correct
 
     /// The base URL, username and apiKey to actually put on the wire, resolved from the mode.
     /// Free never sends credentials (the public server rejects them); Premium always does; self-hosted
@@ -231,7 +228,7 @@ extension Settings {
              proofreadAutoOnClick, proofreadMaxReplacements,
              proofreadMinLength, proofreadAppMode, proofreadApps,
              historyEnabled, sourceLanguage, targetLanguage,
-             correctEnabled, languageToolMode, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
+             correctEnabled, languageToolMode, languageToolBaseURL, languageToolUsername, languageToolLanguage,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
              screenTranslateHotkey, quickTranslateHotkey
     }
@@ -281,7 +278,6 @@ extension Settings {
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolUsername) { languageToolUsername = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolLanguage) { languageToolLanguage = v }
         if let v = try c.decodeIfPresent(LanguageToolMode.self, forKey: .languageToolMode) { languageToolMode = v }
-        if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .correctHotkey) { correctHotkey = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .openRouterFreeOnly) { openRouterFreeOnly = v }
         if let v = try c.decodeIfPresent([ProviderConfig].self, forKey: .providers) { providers = v }
         if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .defaultActionHotkey) { defaultActionHotkey = v }
