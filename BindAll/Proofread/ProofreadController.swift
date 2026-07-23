@@ -46,7 +46,7 @@ final class ProofreadController {
     private var generation = 0
 
     /// Typing pause that triggers a live re-check.
-    private let typingPause: TimeInterval = 1.2
+    private let typingPause: TimeInterval = 0.6
     private var keyMonitor: Any?
     private var typingDebounce: DispatchWorkItem?
 
@@ -331,30 +331,39 @@ final class ProofreadController {
     private func handleApplyResult(_ result: IssueApplier.Result, issue: TextIssue, replacement: String) {
         switch result {
         case .applied(let replacedRange):
-            // Slide the remaining ranges locally instead of re-checking: the server round trip would
-            // cost a second per fix, and the arithmetic is exact. Shift from the range the applier
-            // actually replaced -- relocate may have moved it from the stored issue.range.
+            // Slide the remaining ranges so the underlines move with the text right away.
             issues = IssueMerger.shift(issues, replacedRange: replacedRange,
                                        replacementUTF16Length: (replacement as NSString).length)
-            // Redraw the underlines from the shifted ranges, but only after the write has landed:
-            // the paste path applies asynchronously (0.05-0.3 s), so measuring bounds immediately
-            // would capture pre-paste geometry.
+            // The popup closes: stepping straight to the next issue would work off ranges that are
+            // only a guess until the write actually lands (the paste path is asynchronous), which is
+            // how the following fix ended up refusing or hitting the wrong word.
+            endNavigation()
             underlines.hide()
-            let gen = generation
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                guard let self, gen == self.generation, let element = self.target?.element else { return }
-                self.lastCheckedText = ProofreadAX.currentText(of: element) ?? ""
-                self.redrawUnderlines()
-            }
-            if currentIndex >= issues.count { currentIndex = issues.count - 1 }
-            if issues.isEmpty { flash("No issues left."); return }
-            focusIssue(max(0, currentIndex))
+            recheckAfterWrite(previousText: lastCheckedText)
         case .stale:
             // Force the next pause to re-check: what we knew about the field no longer holds.
             lastCheckedText = ""
             flash("The text changed - checking again…")
         case .failed(let reason):
             flash(reason)
+        }
+    }
+
+    /// Waits for the applied fix to actually show up in the field (Chromium pastes asynchronously)
+    /// and then re-checks it. Re-checking rather than trusting local arithmetic is what keeps the
+    /// next fix honest: every range then comes from the text as it really is.
+    private func recheckAfterWrite(previousText: String) {
+        let gen = generation
+        Task { @MainActor [weak self] in
+            for _ in 0..<12 {
+                try? await Task.sleep(nanoseconds: 60_000_000)
+                guard let self, gen == self.generation, let element = self.target?.element else { return }
+                guard let now = ProofreadAX.currentText(of: element) else { continue }
+                if now != previousText { break }
+            }
+            guard let self, gen == self.generation else { return }
+            self.lastCheckedText = "" // force a real check, not a redraw
+            self.typingPaused()
         }
     }
 

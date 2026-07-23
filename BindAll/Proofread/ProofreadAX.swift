@@ -195,18 +195,49 @@ enum ProofreadAX {
     /// UTF-16 units to find it when the app's offsets differ from ours. Returns nil when the app
     /// answers but nothing nearby matches, and `range` unchanged when it cannot answer at all.
     static func alignedRange(_ range: NSRange, expecting original: String, in element: AXUIElement,
+                             contextBefore: String = "", contextAfter: String = "",
                              window: Int = 16) -> NSRange? {
         guard let here = string(for: range, in: element) else { return range } // app cannot tell us
-        if here == original { return range }
-        // Offsets disagree: probe outwards, nearest first, and take the first exact match.
+        if here == original, contextMatches(range, contextBefore, contextAfter, in: element) {
+            return range
+        }
+        // Offsets disagree: probe outwards, nearest first, and take the first match the surrounding
+        // text agrees with -- the same word can sit elsewhere in the field.
         for distance in 1...window {
             for offset in [distance, -distance] {
                 let candidate = NSRange(location: range.location + offset, length: range.length)
-                guard candidate.location >= 0 else { continue }
-                if string(for: candidate, in: element) == original { return candidate }
+                guard candidate.location >= 0, string(for: candidate, in: element) == original,
+                      contextMatches(candidate, contextBefore, contextAfter, in: element) else { continue }
+                return candidate
             }
         }
         return nil
+    }
+
+    /// Whether the text the app reports around `range` still matches the snapshot taken at check
+    /// time. An empty snapshot (legacy issues, or the click path) means "nothing to disagree with".
+    private static func contextMatches(_ range: NSRange, _ before: String, _ after: String,
+                                       in element: AXUIElement) -> Bool {
+        let span = 6
+        let beforeNS = before as NSString
+        if beforeNS.length > 0, range.location > 0 {
+            let length = min(span, min(beforeNS.length, range.location))
+            let expected = beforeNS.substring(from: beforeNS.length - length)
+            if let actual = string(for: NSRange(location: range.location - length, length: length), in: element),
+               actual != expected {
+                return false
+            }
+        }
+        let afterNS = after as NSString
+        if afterNS.length > 0 {
+            let length = min(span, afterNS.length)
+            let expected = afterNS.substring(to: length)
+            if let actual = string(for: NSRange(location: NSMaxRange(range), length: length), in: element),
+               actual != expected {
+                return false
+            }
+        }
+        return true
     }
 
     /// Whether the element lets us write text straight into the selection (the clean, in-place path).

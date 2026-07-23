@@ -25,7 +25,9 @@ enum IssueApplier {
         // Our offsets come from the field's value; the app's selection may be indexed differently
         // (Chromium's are), which is how a fix ends up on the neighbouring word. Ask the app what it
         // has at that range and shift until its own text agrees -- or refuse.
-        guard let range = ProofreadAX.alignedRange(ourRange, expecting: issue.original, in: element) else {
+        guard let range = ProofreadAX.alignedRange(ourRange, expecting: issue.original, in: element,
+                                                   contextBefore: issue.contextBefore,
+                                                   contextAfter: issue.contextAfter) else {
             return .stale
         }
 

@@ -83,7 +83,7 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
 - **Shift+Cmd+E** → Quick Translate window
 - **Proofread** (LanguageTool), only when enabled in Settings → General, has **no shortcut**: a
-  pause in typing (~1.2 s) re-checks the focused field and underlines every issue in place
+  pause in typing (~0.6 s) re-checks the focused field and underlines every issue in place
   (squiggles; spelling is purple so it is not mistaken for the red one macOS draws). Clicking an
   underlined word shows its fixes instantly -- the issues are already known, no round trip. In the
   popup: arrows or mouse hover choose, Return or a click applies, Tab moves to the next issue,
