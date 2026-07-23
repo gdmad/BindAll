@@ -337,15 +337,26 @@ final class HotkeyCoordinator: ObservableObject {
 
     func menuQuickTranslate() { quickTranslate.toggle() }
 
-    /// Reports what Accessibility exposes for the field the user focuses next. The delay gives them
-    /// time to click back into it -- right after the menu closes, the focused element is the menu.
+    /// Reports what Accessibility exposes for the field the user clicks into after picking the menu
+    /// item. Nothing is shown until the report is ready: our own result panel activates BindAll, and
+    /// showing it first would make the diagnostics describe BindAll instead of the app being tested.
+    /// Polls for up to 6 seconds and keeps the first sample taken in another app with readable text.
     func menuProofreadDiagnostics() {
-        popup.show(title: "Proofread diagnostics", text: "Click into the text field you want to test. Reading it in 3 seconds…")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+        pollDiagnostics(attemptsLeft: 12, best: nil)
+    }
+
+    private func pollDiagnostics(attemptsLeft: Int, best: String?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
-            let report = ProofreadDiagnostics.report(liveIssueCount: self.proofread.liveIssueCount,
+            let sample = ProofreadDiagnostics.report(liveIssueCount: self.proofread.liveIssueCount,
                                                      error: self.proofread.lastCheckError)
-            self.popup.show(title: "Proofread diagnostics", text: report)
+            let isOwnApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+            let usable = !isOwnApp && ProofreadDiagnostics.foundReadableField
+            if usable || attemptsLeft <= 1 {
+                self.popup.show(title: "Proofread diagnostics", text: usable ? sample : (best ?? sample))
+                return
+            }
+            self.pollDiagnostics(attemptsLeft: attemptsLeft - 1, best: isOwnApp ? best : sample)
         }
     }
 

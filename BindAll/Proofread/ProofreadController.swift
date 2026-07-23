@@ -326,7 +326,9 @@ final class ProofreadController {
             if issues.isEmpty { flash("No issues left."); return }
             focusIssue(max(0, currentIndex))
         case .stale:
-            flash("The text changed - press the shortcut again.")
+            // Force the next pause to re-check: what we knew about the field no longer holds.
+            lastCheckedText = ""
+            flash("The text changed - checking again…")
         case .failed(let reason):
             flash(reason)
         }

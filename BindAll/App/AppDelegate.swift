@@ -131,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             ("Quick Translate", HotkeyFormatter.string(s.quickTranslateHotkey), #selector(menuQuickTranslate)),
         ]
         if s.correctEnabled {
-            actions.append(("Proofread diagnostics…", "", #selector(menuProofreadDiagnostics)))
+            actions.append(("Proofread diagnostics (click into a field)…", "", #selector(menuProofreadDiagnostics)))
         }
 
         // Column = widest "title + gap + shortcut" across every shortcut-bearing item.

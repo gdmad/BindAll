@@ -23,24 +23,43 @@ final class UnderlineOverlay {
     func show(issues: [TextIssue], element: AXUIElement) {
         shownIssues = issues
         shownElement = element
-        guard let fieldQuartz = ProofreadAX.frame(of: element) else { hide(); return }
         let primaryHeight = Self.primaryScreenHeight()
-        let field = UnderlineGeometry.appKitRect(fromQuartz: fieldQuartz, primaryScreenHeight: primaryHeight)
 
-        var segments: [(rect: CGRect, color: NSColor)] = []
+        // Word rects first: without them there is nothing to draw anyway, and their union stands in
+        // for a field frame the app refuses to report (Chromium answers one but not always both).
+        var wordRects: [(screen: CGRect, color: NSColor)] = []
         for issue in issues {
-            guard let quartz = ProofreadAX.boundsForRange(issue.range, in: element),
-                  let probe = ProofreadAX.boundsForRange(
-                      NSRange(location: issue.range.location, length: 1), in: element),
-                  UnderlineGeometry.isSingleLine(rangeRect: quartz, probeRect: probe) else { continue }
-            let screen = UnderlineGeometry.appKitRect(fromQuartz: quartz, primaryScreenHeight: primaryHeight)
-            // Panel-local coordinates.
-            let local = CGRect(x: screen.minX - field.minX, y: screen.minY - field.minY,
-                               width: screen.width, height: screen.height)
-            segments.append((rect: local, color: Self.color(for: issue.kind)))
+            guard let quartz = ProofreadAX.boundsForRange(issue.range, in: element) else { continue }
+            // The one-character probe tells a wrapped range from a single-line one. When the app
+            // does not answer it, fall back to a plausible single-line height.
+            let probe = ProofreadAX.boundsForRange(NSRange(location: issue.range.location, length: 1),
+                                                   in: element)
+            if let probe {
+                guard UnderlineGeometry.isSingleLine(rangeRect: quartz, probeRect: probe) else { continue }
+            } else {
+                guard quartz.height > 0, quartz.height <= 40 else { continue }
+            }
+            wordRects.append((screen: UnderlineGeometry.appKitRect(fromQuartz: quartz,
+                                                                   primaryScreenHeight: primaryHeight),
+                              color: Self.color(for: issue.kind)))
         }
-        guard !segments.isEmpty else { hide(); return }
-        shownFieldFrame = fieldQuartz
+        guard !wordRects.isEmpty else { hide(); return }
+
+        let fieldQuartz = ProofreadAX.frame(of: element)
+        let field: CGRect
+        if let fieldQuartz {
+            field = UnderlineGeometry.appKitRect(fromQuartz: fieldQuartz, primaryScreenHeight: primaryHeight)
+        } else {
+            field = wordRects.dropFirst().reduce(wordRects[0].screen) { $0.union($1.screen) }
+                .insetBy(dx: -8, dy: -8)
+        }
+
+        // Panel-local coordinates.
+        let segments = wordRects.map { (rect: CGRect(x: $0.screen.minX - field.minX,
+                                                     y: $0.screen.minY - field.minY,
+                                                     width: $0.screen.width, height: $0.screen.height),
+                                        color: $0.color) }
+        shownFieldFrame = fieldQuartz ?? field
 
         let panel = self.panel ?? makePanel()
         let view = (panel.contentView as? UnderlineView) ?? UnderlineView()
@@ -117,7 +136,8 @@ final class UnderlineOverlay {
             let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, let element = self.shownElement else { return }
-                    guard let frame = ProofreadAX.frame(of: element) else { self.hide(); return }
+                    // No frame reported (some Chromium fields): re-measure rather than give up.
+                    guard let frame = ProofreadAX.frame(of: element) else { self.refresh(); return }
                     if frame != self.shownFieldFrame { self.refresh() }
                 }
             }

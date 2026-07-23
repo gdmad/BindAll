@@ -60,15 +60,23 @@ enum ProofreadAX {
     /// when an assistive app asks for it, via the private `AXManualAccessibility` attribute. Without
     /// this their fields expose no text and no word coordinates at all. Done once per process.
     private static var accessibilityEnabledPids = Set<pid_t>()
+    /// Processes that accepted `AXManualAccessibility` -- only Chromium implements it, so this
+    /// doubles as a reliable "this is an Electron/Chromium app" test.
+    private static var chromiumPids = Set<pid_t>()
 
     static func enableElectronAccessibilityIfNeeded() {
         guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               !accessibilityEnabledPids.contains(pid) else { return }
         accessibilityEnabledPids.insert(pid)
         let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        let status = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        if status == .success { chromiumPids.insert(pid) }
         AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
     }
+
+    /// Chromium reports `kAXSelectedText` as settable but applies the write asynchronously, so it
+    /// can be neither verified nor trusted; such apps take the paste path instead.
+    static func isChromium(pid: pid_t) -> Bool { chromiumPids.contains(pid) }
 
     /// The system-wide focused element.
     static func focusedElement() -> AXUIElement? {

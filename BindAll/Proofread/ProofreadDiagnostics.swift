@@ -5,8 +5,13 @@ import ApplicationServices
 /// entirely on that, so when nothing happens in an app this answers why: no permission, no readable
 /// text, or no word coordinates (which is what underlining needs).
 enum ProofreadDiagnostics {
+    /// Whether the last report found a field with readable text, so the caller can keep polling
+    /// until the user has clicked into the app they want to test.
+    private(set) static var foundReadableField = false
+
     /// Collects the report. Call on the main thread, with the field the user wants to test focused.
     static func report(liveIssueCount: Int, error: String?) -> String {
+        foundReadableField = false
         var lines: [String] = []
         lines.append("Accessibility trusted: \(AXIsProcessTrusted())")
         // Chromium/Electron builds its tree only when asked; do it before reading anything.
@@ -14,6 +19,10 @@ enum ProofreadDiagnostics {
 
         if let app = NSWorkspace.shared.frontmostApplication {
             lines.append("Frontmost app: \(app.localizedName ?? "?") (\(app.bundleIdentifier ?? "no bundle id"), pid \(app.processIdentifier))")
+            lines.append("Chromium/Electron: \(ProofreadAX.isChromium(pid: app.processIdentifier))")
+            if app.bundleIdentifier == Bundle.main.bundleIdentifier {
+                lines.append("NOTE: focus was on BindAll itself - click into another app's text field and run this again.")
+            }
         } else {
             lines.append("Frontmost app: none")
         }
@@ -37,6 +46,7 @@ enum ProofreadDiagnostics {
 
         switch ProofreadAX.focus() {
         case .axField(let target):
+            foundReadableField = true
             lines.append("Result: readable field (\((target.text as NSString).length) UTF-16 units)")
             lines.append("Selection: location \(target.selection.location), length \(target.selection.length)")
             lines.append("Can write into the selection: \(ProofreadAX.canSetSelectedText(target.element))")
