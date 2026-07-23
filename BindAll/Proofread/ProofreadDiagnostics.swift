@@ -52,10 +52,26 @@ enum ProofreadDiagnostics {
             lines.append("Can write into the selection: \(ProofreadAX.canSetSelectedText(target.element))")
             let probe = WordBoundary.wordRange(at: 0, in: target.text)
                 ?? NSRange(location: 0, length: min(3, (target.text as NSString).length))
-            if let rect = ProofreadAX.boundsForRange(probe, in: target.element) {
-                lines.append("Word coordinates: yes \(Int(rect.origin.x)),\(Int(rect.origin.y)) \(Int(rect.width))x\(Int(rect.height)) - underlines work here")
+            let ns = target.text as NSString
+            let ours = ns.substring(with: probe)
+            // Do the app's own offsets line up with the value we measured the words in?
+            if let theirs = ProofreadAX.string(for: probe, in: target.element) {
+                lines.append("AXStringForRange at \(probe.location)+\(probe.length): \(theirs.debugDescription) (we expect \(ours.debugDescription))")
+                if theirs != ours, let aligned = ProofreadAX.alignedRange(probe, expecting: ours, in: target.element) {
+                    lines.append("Offsets differ: the same text sits at \(aligned.location) for the app (shift \(aligned.location - probe.location))")
+                } else if theirs != ours {
+                    lines.append("Offsets differ and no nearby match was found")
+                }
             } else {
-                lines.append("Word coordinates: NO - this app cannot show underlines (fixes still work)")
+                lines.append("AXStringForRange: not answered")
+            }
+            if let rect = ProofreadAX.rawBounds(probe, in: target.element) {
+                lines.append("Word coordinates: yes \(Int(rect.origin.x)),\(Int(rect.origin.y)) \(Int(rect.width))x\(Int(rect.height)) - underlines work here")
+            } else if let rect = ProofreadAX.boundsFromLeaves(probe, in: target.element) {
+                lines.append("Word coordinates: via leaf elements \(Int(rect.origin.x)),\(Int(rect.origin.y)) \(Int(rect.width))x\(Int(rect.height))")
+            } else {
+                let leaves = ProofreadAX.textLeaves(of: target.element)
+                lines.append("Word coordinates: NO (element and \(leaves.count) leaf elements) - no underlines here")
             }
             var paramNames: CFArray?
             if AXUIElementCopyParameterizedAttributeNames(target.element, &paramNames) == .success,

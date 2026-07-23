@@ -21,7 +21,13 @@ enum IssueApplier {
     static func apply(_ issue: TextIssue, replacement: String, element: AXUIElement, pid: pid_t,
                       restoreClipboard: Bool) async -> Result {
         guard let text = ProofreadAX.currentText(of: element) else { return .failed("Cannot read the field.") }
-        guard let range = IssueMerger.relocate(issue, in: text) else { return .stale }
+        guard let ourRange = IssueMerger.relocate(issue, in: text) else { return .stale }
+        // Our offsets come from the field's value; the app's selection may be indexed differently
+        // (Chromium's are), which is how a fix ends up on the neighbouring word. Ask the app what it
+        // has at that range and shift until its own text agrees -- or refuse.
+        guard let range = ProofreadAX.alignedRange(ourRange, expecting: issue.original, in: element) else {
+            return .stale
+        }
 
         // Path A: write straight into the selection. The caret stays put and the pasteboard is
         // untouched, so this is the path to prefer wherever the app allows it. Chromium is excluded:
@@ -67,16 +73,25 @@ enum IssueApplier {
         var confirmations = 0
         for attempt in 0..<8 {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 40_000_000) }
-            if let selected = ProofreadAX.selectedText(of: element) {
-                confirmations = selected == original ? confirmations + 1 : 0
-                if confirmations >= 2 { return true }
-            } else if let selectedRange = ProofreadAX.selectedRange(of: element) {
-                // No readable selected text; the range is all we have to go on.
-                confirmations = selectedRange == range ? confirmations + 1 : 0
-                if confirmations >= 2 { return true }
-            } else {
+            guard let selectedRange = ProofreadAX.selectedRange(of: element) else {
+                // No readable selection: the selected text is the only thing left to check.
+                if let selected = ProofreadAX.selectedText(of: element) {
+                    confirmations = selected == original ? confirmations + 1 : 0
+                    if confirmations >= 2 { return true }
+                    continue
+                }
                 return true // the app exposes neither; nothing left to check against
             }
+            // What the app says is selected, by its own reckoning -- not our arithmetic. Chromium
+            // echoes the range we wrote straight back, so the range alone proves nothing.
+            let selectedText = ProofreadAX.string(for: selectedRange, in: element)
+                ?? ProofreadAX.selectedText(of: element)
+            if let selectedText {
+                confirmations = selectedText == original ? confirmations + 1 : 0
+            } else {
+                confirmations = selectedRange == range ? confirmations + 1 : 0
+            }
+            if confirmations >= 2 { return true }
         }
         return false
     }

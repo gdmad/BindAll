@@ -137,7 +137,7 @@ final class ProofreadController {
         guard case .axField(let found) = ProofreadAX.focus() else { return }
         guard found.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= config.minLength else { return }
 
-        let probe: NSRange
+        var probe: NSRange
         if found.selection.length > 0 {
             // Double-click or drag: reuse the selection when it is word-sized; a long selection is
             // the user copying text, so stay quiet.
@@ -145,6 +145,16 @@ final class ProofreadController {
             probe = found.selection
         } else if let word = WordBoundary.wordRange(at: found.caret, in: found.text) {
             probe = word
+            // The caret comes from the app's selection, which in Chromium is indexed differently
+            // from the value we measured the word in. Translate it back into our offsets, so the
+            // popup belongs to the word actually clicked.
+            let clicked = (found.text as NSString).substring(with: word)
+            if let appRange = ProofreadAX.alignedRange(word, expecting: clicked, in: found.element),
+               appRange != word,
+               let ourRange = WordBoundary.wordRange(at: word.location - (appRange.location - word.location),
+                                                     in: found.text) {
+                probe = ourRange
+            }
         } else {
             // Clicked whitespace or an empty spot: close the popup but keep the underlines.
             endNavigation()

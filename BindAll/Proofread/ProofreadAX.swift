@@ -177,6 +177,38 @@ enum ProofreadAX {
         return textRef as? String
     }
 
+    /// The text the app itself reports for `range` (`AXStringForRange`), or nil when it does not
+    /// answer. This is the only trustworthy way to check a range in apps whose value offsets and
+    /// selection offsets do not line up -- Chromium being the notable one.
+    static func string(for range: NSRange, in element: AXUIElement) -> String? {
+        var cfRange = CFRange(location: range.location, length: range.length)
+        guard range.length > 0, let value = AXValueCreate(.cfRange, &cfRange) else { return nil }
+        var result: AnyObject?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXStringForRangeParameterizedAttribute as CFString, value, &result) == .success else {
+            return nil
+        }
+        return result as? String
+    }
+
+    /// Confirms `range` really holds `original` according to the app, shifting by up to `window`
+    /// UTF-16 units to find it when the app's offsets differ from ours. Returns nil when the app
+    /// answers but nothing nearby matches, and `range` unchanged when it cannot answer at all.
+    static func alignedRange(_ range: NSRange, expecting original: String, in element: AXUIElement,
+                             window: Int = 16) -> NSRange? {
+        guard let here = string(for: range, in: element) else { return range } // app cannot tell us
+        if here == original { return range }
+        // Offsets disagree: probe outwards, nearest first, and take the first exact match.
+        for distance in 1...window {
+            for offset in [distance, -distance] {
+                let candidate = NSRange(location: range.location + offset, length: range.length)
+                guard candidate.location >= 0 else { continue }
+                if string(for: candidate, in: element) == original { return candidate }
+            }
+        }
+        return nil
+    }
+
     /// Whether the element lets us write text straight into the selection (the clean, in-place path).
     static func canSetSelectedText(_ element: AXUIElement) -> Bool {
         var settable = DarwinBoolean(false)
@@ -198,19 +230,63 @@ enum ProofreadAX {
         return NSPoint(x: rect.minX, y: base - rect.maxY)
     }
 
-    /// Screen bounds of `range` (Quartz, top-left origin); nil when the app does not answer or
-    /// answers with an empty rect (many Electron and web fields).
+    /// Screen bounds of `range` (Quartz, top-left origin); nil when neither the element nor its leaf
+    /// text descendants answer (many Electron and web fields keep the geometry on the leaves).
     static func boundsForRange(_ range: NSRange, in element: AXUIElement) -> CGRect? {
+        if let rect = rawBounds(range, in: element) { return rect }
+        return boundsFromLeaves(range, in: element)
+    }
+
+    /// One `AXBoundsForRange` question, with the answer sanity-checked.
+    static func rawBounds(_ range: NSRange, in element: AXUIElement) -> CGRect? {
         var cfRange = CFRange(location: range.location, length: max(1, range.length))
         guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return nil }
         var boundsRef: AnyObject?
         guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
-                                                         rangeValue, &boundsRef) == .success else { return nil }
+                                                         rangeValue, &boundsRef) == .success,
+              let value = boundsRef, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var rect = CGRect.zero
-        guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect), rect.width > 0 || rect.height > 0 else {
+        guard AXValueGetValue(value as! AXValue, .cgRect, &rect), rect.width > 0 || rect.height > 0 else {
             return nil
         }
         return rect
+    }
+
+    /// Walks the leaf text descendants, mapping the field-wide `range` onto the leaf that holds it.
+    static func boundsFromLeaves(_ range: NSRange, in element: AXUIElement) -> CGRect? {
+        var offset = 0
+        for leaf in textLeaves(of: element) {
+            let length = (leaf.text as NSString).length
+            defer { offset += length }
+            guard range.location >= offset, range.location < offset + length else { continue }
+            let local = NSRange(location: range.location - offset,
+                                length: min(range.length, length - (range.location - offset)))
+            if let rect = rawBounds(local, in: leaf.element) { return rect }
+        }
+        return nil
+    }
+
+    /// Leaf elements carrying text, in reading order (depth-limited: these trees can be large).
+    static func textLeaves(of element: AXUIElement, depth: Int = 3, budget: Int = 40) -> [(element: AXUIElement, text: String)] {
+        guard depth > 0, budget > 0 else { return [] }
+        var childrenRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else { return [] }
+
+        var out: [(element: AXUIElement, text: String)] = []
+        var left = budget
+        for child in children {
+            guard left > 0 else { break }
+            left -= 1
+            if let text = currentText(of: child), !text.isEmpty {
+                out.append((element: child, text: text))
+            } else {
+                let nested = textLeaves(of: child, depth: depth - 1, budget: left)
+                left -= nested.count
+                out.append(contentsOf: nested)
+            }
+        }
+        return out
     }
 
     /// Bottom-left of the element's frame in AppKit screen coordinates, for placing the panel.
