@@ -32,14 +32,26 @@ final class ProofreadController {
     private let popover = ProofreadPopover()
     private let underlines = UnderlineOverlay()
 
-    // Session state.
+    // Live state: what was found in the focused field. Outlives the popup -- the underlines stay up
+    // while the user reads, and a click can open the fixes without another round trip.
     private var target: ProofTarget?
     private var issues: [TextIssue] = []
+    /// The field text the current `issues` were found in; a re-check is pointless while it matches.
+    private var lastCheckedText = ""
+    // Navigation state: which issue the popup is on.
     private var currentIndex = 0
     private var selectedReplacement = 0
     private var checkTask: Task<Void, Never>?
     /// Bumped on every new check and on end(); a result that comes back stale is dropped.
     private var generation = 0
+
+    /// Typing pause that triggers a live re-check.
+    private let typingPause: TimeInterval = 1.2
+    private var keyMonitor: Any?
+    private var typingDebounce: DispatchWorkItem?
+
+    /// For the diagnostics report.
+    var liveIssueCount: Int { issues.count }
 
     // Key interception, alive only while the popup is up.
     private var tap: CFMachPort?
@@ -93,27 +105,38 @@ final class ProofreadController {
         } else {
             stopClickMonitor()
         }
-        if !config.enabled { end() }
+        if config.enabled {
+            startTypingMonitor()
+        } else {
+            stopTypingMonitor()
+            end()
+        }
     }
 
     func stop() {
         end()
         stopClickMonitor()
+        stopTypingMonitor()
     }
 
     // MARK: - Entry points
 
-    /// The Proofread shortcut: check the whole field and start at the first issue.
+    /// The Proofread shortcut: step through the issues, starting at the first one. Uses what the
+    /// live pass already found; only checks the server when the text moved on since then.
     func run() {
         guard config.enabled, AccessibilityPermission.isGranted, appAllowed() else { return }
-        end()
+        endNavigation()
 
         switch ProofreadAX.focus() {
         case .axField(let found):
             target = found
+            if !issues.isEmpty, found.text == lastCheckedText {
+                focusIssue(0)
+                return
+            }
             check(text: found.text, offset: 0, startAtFirst: true)
         case .selectionOnly(let text):
-            target = nil
+            clearLive()
             check(text: text, offset: 0, startAtFirst: true)
         case .none:
             // No AX text (Electron, some web fields): fall back to whatever is selected. Fixes then
@@ -123,13 +146,13 @@ final class ProofreadController {
                 flash("Select some text, or focus a text field.")
                 return
             }
-            target = nil
+            clearLive()
             check(text: selection, offset: 0, startAtFirst: true)
         }
     }
 
-    /// Mouse-up: if the click landed inside a word (or double-clicked one), check the field and show
-    /// the fixes for whatever issue that word sits on. Silent when there is nothing to say.
+    /// Mouse-up: show the fixes for the clicked word. When the live pass already checked this text
+    /// the popup opens instantly; otherwise the click doubles as a check request.
     private func clickedInText() {
         guard config.enabled, config.autoOnClick, AccessibilityPermission.isGranted, appAllowed() else { return }
         guard case .axField(let found) = ProofreadAX.focus() else { return }
@@ -144,13 +167,39 @@ final class ProofreadController {
         } else if let word = WordBoundary.wordRange(at: found.caret, in: found.text) {
             probe = word
         } else {
-            // Clicked whitespace or an empty spot: the user moved on, close any open session.
-            if isSessionActive { end() }
+            // Clicked whitespace or an empty spot: close the popup but keep the underlines.
+            endNavigation()
             return
         }
 
+        let sameField = target?.element == found.element
         target = found
+        if sameField, found.text == lastCheckedText {
+            showFixes(overlapping: probe) // already known: no round trip
+            return
+        }
         check(text: found.text, offset: 0, startAtFirst: false, selection: probe)
+    }
+
+    /// Typing paused: re-check the focused field so the underlines match what is on screen now.
+    private func typingPaused() {
+        guard config.enabled, AccessibilityPermission.isGranted, appAllowed() else { return }
+        guard case .axField(let found) = ProofreadAX.focus() else { clearLive(); return }
+        guard found.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= config.minLength else {
+            clearLive()
+            return
+        }
+
+        let sameField = target?.element == found.element
+        target = found
+        if sameField, found.text == lastCheckedText {
+            // Nothing changed (arrow keys, modifiers): just put the underlines back.
+            redrawUnderlines()
+            return
+        }
+        if !sameField { issues = [] }
+        // Paragraph cache keeps this to one request for the paragraph actually edited.
+        check(text: found.text, offset: 0, startAtFirst: false, selection: nil)
     }
 
     // MARK: - Checking
@@ -184,20 +233,24 @@ final class ProofreadController {
     private func applyResults(_ found: [TextIssue], startAtFirst: Bool, selection: NSRange?) {
         // Cap once at the door so the popup, arrow navigation and accept all see the same list.
         issues = IssueMerger.capReplacements(found, limit: config.maxReplacements)
-
-        if !issues.isEmpty, let element = target?.element {
-            underlines.show(issues: issues, element: element)
-        }
+        lastCheckedText = target?.text ?? ""
+        redrawUnderlines()
 
         if startAtFirst {
             guard !issues.isEmpty else { flash("No issues found."); return }
             focusIssue(0)
             return
         }
-        // Auto path: only speak up if the clicked word landed on an issue.
-        guard let selection, let issue = IssueMerger.firstIssue(in: issues, overlapping: selection),
+        // Live/click path: the popup only opens for a clicked word that sits on an issue.
+        guard let selection else { return }
+        showFixes(overlapping: selection)
+    }
+
+    /// Opens the popup for the issue under `probe`, if there is one. Keeps the underlines either way.
+    private func showFixes(overlapping probe: NSRange) {
+        guard let issue = IssueMerger.firstIssue(in: issues, overlapping: probe),
               let index = issues.firstIndex(where: { $0.id == issue.id }) else {
-            end()
+            endNavigation()
             return
         }
         // Select the issue natively (like the shortcut path) so the user sees exactly what will be
@@ -206,10 +259,18 @@ final class ProofreadController {
         focusIssue(index)
     }
 
+    private func redrawUnderlines() {
+        guard !issues.isEmpty, let element = target?.element else {
+            underlines.hide()
+            return
+        }
+        underlines.show(issues: issues, element: element)
+    }
+
     // MARK: - Session
 
     private func focusIssue(_ index: Int) {
-        guard index >= 0, index < issues.count else { end(); return }
+        guard index >= 0, index < issues.count else { endNavigation(); return }
         currentIndex = index
         selectedReplacement = 0
         showCurrent(select: true)
@@ -218,7 +279,7 @@ final class ProofreadController {
 
     /// Shows the popup for the current issue. `select` also highlights it in the user's field.
     private func showCurrent(select: Bool) {
-        guard currentIndex < issues.count else { end(); return }
+        guard currentIndex < issues.count else { endNavigation(); return }
         let issue = issues[currentIndex]
 
         if select, let element = target?.element {
@@ -254,7 +315,7 @@ final class ProofreadController {
     }
 
     private func skip() {
-        guard currentIndex + 1 < issues.count else { end(); return }
+        guard currentIndex + 1 < issues.count else { endNavigation(); return }
         focusIssue(currentIndex + 1)
     }
 
@@ -264,7 +325,7 @@ final class ProofreadController {
         guard let target else {
             // No AX element: the best we can do is hand them the corrected word.
             TextInjector.copyToPasteboard(replacement)
-            flash("Copied \"\(replacement)\" - this app does not expose its text.")
+            flash("This app does not expose its text; \"\(replacement)\" is on the clipboard.")
             return
         }
 
@@ -282,9 +343,9 @@ final class ProofreadController {
             underlines.hide()
             let gen = generation
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                guard let self, gen == self.generation, self.isSessionActive,
-                      let element = self.target?.element else { return }
-                self.underlines.show(issues: self.issues, element: element)
+                guard let self, gen == self.generation, let element = self.target?.element else { return }
+                self.lastCheckedText = ProofreadAX.currentText(of: element) ?? ""
+                self.redrawUnderlines()
             }
             if currentIndex >= issues.count { currentIndex = issues.count - 1 }
             if issues.isEmpty { flash("No issues left."); return }
@@ -296,17 +357,30 @@ final class ProofreadController {
         }
     }
 
-    private func end() {
+    /// Closes the popup and disarms the key tap, leaving the underlines and the found issues alone:
+    /// they belong to the field, not to this popup.
+    private func endNavigation() {
+        currentIndex = 0
+        selectedReplacement = 0
+        popover.hide()
+        setActive(false)
+    }
+
+    /// Forgets everything found in the field and takes the underlines down. Used when the focus
+    /// moves elsewhere or the feature is switched off.
+    private func clearLive() {
         checkTask?.cancel()
         checkTask = nil
         generation &+= 1
         issues = []
-        currentIndex = 0
-        selectedReplacement = 0
+        lastCheckedText = ""
         target = nil
-        popover.hide()
         underlines.hide()
-        setActive(false)
+    }
+
+    private func end() {
+        endNavigation()
+        clearLive()
     }
 
     /// A transient notice that closes itself; never leaves the key tap armed.
@@ -393,11 +467,12 @@ final class ProofreadController {
             DispatchQueue.main.async { [weak self] in self?.skip() }
             return nil
         case kVK_Escape:
-            DispatchQueue.main.async { [weak self] in self?.end() }
+            // Closes the popup only: the underlines stay, they are not part of this popup.
+            DispatchQueue.main.async { [weak self] in self?.endNavigation() }
             return nil
         default:
             // Anything else means the user moved on: close, but let the key reach the field.
-            DispatchQueue.main.async { [weak self] in self?.end() }
+            DispatchQueue.main.async { [weak self] in self?.endNavigation() }
             return Unmanaged.passUnretained(event)
         }
     }
@@ -430,6 +505,30 @@ final class ProofreadController {
         appSwitchObserver = nil
         clickDebounce?.cancel()
         clickDebounce = nil
+    }
+
+    // MARK: - Typing monitor
+
+    /// Live checking: a passive keyDown monitor (no tap, so typing is never delayed) re-checks the
+    /// field once the user pauses. The underlines go down on the first keystroke -- the text under
+    /// them is moving -- and come back with the fresh result.
+    private func startTypingMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
+            guard let self else { return }
+            self.underlines.hide()
+            self.typingDebounce?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.typingPaused() }
+            self.typingDebounce = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.typingPause, execute: work)
+        }
+    }
+
+    private func stopTypingMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        typingDebounce?.cancel()
+        typingDebounce = nil
     }
 
     // MARK: - Helpers

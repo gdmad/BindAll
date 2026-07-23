@@ -12,10 +12,17 @@ import AppKit
 final class UnderlineOverlay {
     private var panel: NSPanel?
     private var scrollMonitor: Any?
-    private var keyMonitor: Any?
     private var appSwitchObserver: NSObjectProtocol?
+    private var refreshTimer: Timer?
+    private var refreshWork: DispatchWorkItem?
+    /// What is currently drawn, so scroll and window moves can be followed by re-measuring.
+    private var shownIssues: [TextIssue] = []
+    private var shownElement: AXUIElement?
+    private var shownFieldFrame: CGRect = .zero
 
     func show(issues: [TextIssue], element: AXUIElement) {
+        shownIssues = issues
+        shownElement = element
         guard let fieldQuartz = ProofreadAX.frame(of: element) else { hide(); return }
         let primaryHeight = Self.primaryScreenHeight()
         let field = UnderlineGeometry.appKitRect(fromQuartz: fieldQuartz, primaryScreenHeight: primaryHeight)
@@ -33,6 +40,7 @@ final class UnderlineOverlay {
             segments.append((rect: local, color: Self.color(for: issue.kind)))
         }
         guard !segments.isEmpty else { hide(); return }
+        shownFieldFrame = fieldQuartz
 
         let panel = self.panel ?? makePanel()
         let view = (panel.contentView as? UnderlineView) ?? UnderlineView()
@@ -45,7 +53,17 @@ final class UnderlineOverlay {
 
     func hide() {
         panel?.orderOut(nil)
+        shownIssues = []
+        shownElement = nil
+        shownFieldFrame = .zero
         removeHideTriggers()
+    }
+
+    /// Re-measures and redraws what is already shown. Cheap enough for scrolling: a couple of AX
+    /// calls per issue, and only while the overlay is visible.
+    private func refresh() {
+        guard let element = shownElement, !shownIssues.isEmpty else { return }
+        show(issues: shownIssues, element: element)
     }
 
     // MARK: - Panel
@@ -66,9 +84,11 @@ final class UnderlineOverlay {
     }
 
     /// Colors mirror ProofreadPopover.color (SwiftUI Color there, NSColor here); keep them in sync.
+    /// Spelling is purple, not red: macOS draws its own red squiggles in many apps and the two
+    /// must not be mistaken for each other.
     private static func color(for kind: IssueKind) -> NSColor {
         switch kind {
-        case .spelling: return .systemRed
+        case .spelling: return .systemPurple
         case .grammar: return .systemOrange
         case .punctuation: return .systemBlue
         case .style: return .systemGray
@@ -82,19 +102,27 @@ final class UnderlineOverlay {
 
     // MARK: - Hide triggers
 
-    /// Scroll, typing and app switches all move the text out from under the squiggles; hide rather
-    /// than drift. The popup's own navigation keys are consumed by the session's event tap and never
-    /// reach a global monitor, so arrows/Return/Tab do not hide the underlines.
+    /// Scrolling and window moves shift the text under the squiggles, so re-measure and follow it.
+    /// (Typing is handled by the controller: it hides the underlines and re-checks after the pause.)
+    /// An app switch means this field is no longer on screen: hide.
     private func installHideTriggers() {
         if scrollMonitor == nil {
             scrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel]) { [weak self] _ in
-                Task { @MainActor in self?.hide() }
+                Task { @MainActor in self?.scheduleRefresh() }
             }
         }
-        if keyMonitor == nil {
-            keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
-                Task { @MainActor in self?.hide() }
+        if refreshTimer == nil {
+            // No AX notifications for window moves/resizes: poll the field frame instead. Only runs
+            // while the overlay is visible.
+            let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, let element = self.shownElement else { return }
+                    guard let frame = ProofreadAX.frame(of: element) else { self.hide(); return }
+                    if frame != self.shownFieldFrame { self.refresh() }
+                }
             }
+            RunLoop.main.add(timer, forMode: .common)
+            refreshTimer = timer
         }
         if appSwitchObserver == nil {
             appSwitchObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -108,10 +136,20 @@ final class UnderlineOverlay {
     private func removeHideTriggers() {
         if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
         scrollMonitor = nil
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
+        refreshTimer?.invalidate()
+        refreshTimer = nil
         if let appSwitchObserver { NSWorkspace.shared.notificationCenter.removeObserver(appSwitchObserver) }
         appSwitchObserver = nil
+        refreshWork?.cancel()
+        refreshWork = nil
+    }
+
+    /// Coalesces the burst of scroll events into one re-measure.
+    private func scheduleRefresh() {
+        refreshWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.refresh() }
+        refreshWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
 }
 

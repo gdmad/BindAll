@@ -52,6 +52,7 @@ BindAll/
 │   ├── WordBoundary.swift             # word range under the caret (click-to-proofread trigger)
 │   ├── UnderlineGeometry.swift        # pure geometry: rect flip, squiggle path, line check
 │   ├── UnderlineOverlay.swift         # click-through panel with squiggles under all found issues
+│   ├── ProofreadDiagnostics.swift     # menu-bar report: what AX exposes for the focused field
 │   └── ProofreadController.swift      # session, key tap (only while the popup is up), click popup
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
@@ -81,13 +82,16 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Cmd+C ×3** → translate the selection, shown in a popup near the cursor
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
 - **Shift+Cmd+E** → Quick Translate window
-- **Shift+Cmd+C** → **Proofread** (LanguageTool), only when enabled in Settings → General. Checks the
-  whole focused field (read over AX; nothing needs to be selected), selects the first problem **in the
-  field itself** and shows the fixes under it: arrows or mouse hover choose, Return or a click
-  applies, Tab skips, Esc exits. The number of fixes listed per issue is a setting (1-10, default 3).
-  A single click inside a problem word (or double-clicking one) also pops the fixes up on its own,
-  with no shortcut. All found issues are underlined in the field (kind-colored squiggles) while the
-  session is active; scrolling, typing or switching apps hides the underlines.
+- **Proofread** (LanguageTool), only when enabled in Settings → General, works live: a pause in
+  typing (~1.2 s) re-checks the focused field and underlines every issue in place (squiggles;
+  spelling is purple so it is not mistaken for the red one macOS draws). Clicking a problem word
+  shows its fixes instantly -- the issues are already known, no round trip. **Shift+Cmd+C** steps
+  through them from the first: arrows or mouse hover choose, Return or a click applies, Tab skips,
+  Esc closes the popup (the underlines stay). The number of fixes listed per issue is a setting
+  (1-10, default 3). Underlines follow scrolling and window moves, go down while typing and come
+  back with the fresh result, and disappear on an app switch. Apps that expose no word coordinates
+  (many Electron/web fields) get no underlines; the popup still works if their text is readable.
+  «Proofread diagnostics…» in the menu bar reports what Accessibility exposes for a given field.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (off by default; enable on General, configure on the Autocomplete

@@ -351,6 +351,17 @@ final class HotkeyCoordinator: ObservableObject {
     }
     func menuQuickTranslate() { quickTranslate.toggle() }
 
+    /// Reports what Accessibility exposes for the field the user focuses next. The delay gives them
+    /// time to click back into it -- right after the menu closes, the focused element is the menu.
+    func menuProofreadDiagnostics() {
+        popup.show(title: "Proofread diagnostics", text: "Click into the text field you want to test. Reading it in 3 seconds…")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            let report = ProofreadDiagnostics.report(liveIssueCount: self.proofread.liveIssueCount)
+            self.popup.show(title: "Proofread diagnostics", text: report)
+        }
+    }
+
     private func runFromMenu(_ which: MenuAction) {
         guard appState.settings.enabled, !isBusy else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
