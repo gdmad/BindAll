@@ -14,17 +14,22 @@ struct LanguageToolConnectionSection: View {
     @State private var status: String = ""
     @State private var ok: Bool?
     @State private var testing = false
+    @State private var modeDraft: LanguageToolMode = .free
     @State private var testTask: Task<Void, Never>?
 
     var body: some View {
         Section {
-            Picker("Account type", selection: $appState.settings.languageToolMode) {
+            // Driven by a draft: a segmented picker bound straight to the published settings commits
+            // its selection from within the view update ("Publishing changes from within view
+            // updates"). The draft also keeps the segment and the credential rows in sync instantly.
+            Picker("Account type", selection: $modeDraft) {
                 ForEach(LanguageToolMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
             }
             .pickerStyle(.segmented)
-            .onChange(of: appState.settings.languageToolMode) { _, mode in
+            .onChange(of: modeDraft) { _, mode in
                 // A stale test verdict is misleading once the mode changed.
                 resetTest()
+                DispatchQueue.main.async { appState.settings.languageToolMode = mode }
                 // Pre-fill the URL for the chosen mode; the field stays editable. The draft's own
                 // onChange forwards it into settings on the next runloop tick.
                 guard let url = mode.defaultURL else { return }
@@ -41,7 +46,7 @@ struct LanguageToolConnectionSection: View {
                     }
             }
             LabeledContent("Language") {
-                Picker("", selection: $appState.settings.languageToolLanguage) {
+                Picker("", selection: deferredWrite($appState.settings.languageToolLanguage)) {
                     Text("Auto Detect").tag(AppLanguages.autoTag)
                     ForEach(AppLanguages.list, id: \.code) { Text($0.name).tag($0.code) }
                 }
@@ -49,7 +54,7 @@ struct LanguageToolConnectionSection: View {
             }
 
             // Credentials only matter for Premium (required) and self-hosted with auth (optional).
-            if appState.settings.languageToolMode != .free {
+            if modeDraft != .free {
                 LabeledContent("Username / email") {
                     TextField("", text: $usernameDraft)
                         .labelsHidden().textFieldStyle(.plain).darkField()
@@ -89,6 +94,7 @@ struct LanguageToolConnectionSection: View {
     }
 
     private func load() {
+        modeDraft = appState.settings.languageToolMode
         tokenDraft = appState.languageToolToken()
         urlDraft = appState.settings.languageToolBaseURL
         usernameDraft = appState.settings.languageToolUsername

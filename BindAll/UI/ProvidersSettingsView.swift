@@ -72,10 +72,10 @@ struct ProvidersSettingsView: View {
                         }
                 }
                 if !models.isEmpty {
-                    Picker("Available", selection: Binding(
+                    Picker("Available", selection: deferredWrite(Binding(
                         get: { configBinding.wrappedValue.model },
                         set: { var c = configBinding.wrappedValue; c.model = $0; configBinding.wrappedValue = c }
-                    )) {
+                    ))) {
                         ForEach(models, id: \.self) { Text($0).tag($0) }
                     }
                 }

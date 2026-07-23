@@ -23,7 +23,7 @@ struct ProofreadSettingsView: View {
             LanguageToolConnectionSection()
 
             Section {
-                Picker("Check in", selection: $appState.settings.proofreadAppMode) {
+                Picker("Check in", selection: deferredWrite($appState.settings.proofreadAppMode)) {
                     Text("All apps").tag("all")
                     Text("Only selected apps").tag("allow")
                     Text("All except selected").tag("deny")

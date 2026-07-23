@@ -13,7 +13,7 @@ struct AutocompleteSettingsView: View {
             Section {
                 Stepper("Suggestions shown: \(appState.settings.autocompleteCount)",
                         value: $appState.settings.autocompleteCount, in: 1...9)
-                Picker("Layout", selection: $appState.settings.autocompleteHorizontal) {
+                Picker("Layout", selection: deferredWrite($appState.settings.autocompleteHorizontal)) {
                     Text("Column").tag(false)
                     Text("Line").tag(true)
                 }
@@ -50,7 +50,7 @@ struct AutocompleteSettingsView: View {
             }
 
             Section {
-                Picker("Show in", selection: $appState.settings.autocompleteAppMode) {
+                Picker("Show in", selection: deferredWrite($appState.settings.autocompleteAppMode)) {
                     Text("All apps").tag("all")
                     Text("Only selected apps").tag("allow")
                     Text("All except selected").tag("deny")

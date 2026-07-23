@@ -69,7 +69,7 @@ struct GeneralSettingsView: View {
             }
 
             Section {
-                Picker("Engine for text actions", selection: $appState.settings.defaultEngine) {
+                Picker("Engine for text actions", selection: deferredWrite($appState.settings.defaultEngine)) {
                     ForEach(ProviderKind.allCases) { kind in
                         Text(kind.displayName).tag(kind)
                     }
@@ -192,7 +192,7 @@ struct TranslationSection: View {
         Section {
             HStack(spacing: 8) {
                 Text("Source").foregroundStyle(.secondary)
-                languagePicker(selection: $appState.settings.sourceLanguage, includeAuto: true)
+                languagePicker(selection: deferredWrite($appState.settings.sourceLanguage), includeAuto: true)
 
                 Button { swap() } label: { Image(systemName: "arrow.left.arrow.right") }
                     .buttonStyle(.borderless)
@@ -200,7 +200,7 @@ struct TranslationSection: View {
                     .help("Swap source and target")
 
                 Text("Target").foregroundStyle(.secondary)
-                languagePicker(selection: $appState.settings.targetLanguage, includeAuto: false)
+                languagePicker(selection: deferredWrite($appState.settings.targetLanguage), includeAuto: false)
             }
             statusRow
         } header: {
