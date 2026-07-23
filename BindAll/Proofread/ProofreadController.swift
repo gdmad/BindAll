@@ -274,7 +274,7 @@ final class ProofreadController {
         }
         popover.show(issue: issue, selected: selectedReplacement,
                      position: "\(currentIndex + 1) of \(issues.count)",
-                     topLeft: anchor(for: issue),
+                     anchor: anchor(for: issue),
                      onHover: { [weak self] index in self?.hoverReplacement(index) },
                      onAccept: { [weak self] index in self?.acceptReplacement(index) })
     }
@@ -395,7 +395,7 @@ final class ProofreadController {
 
     /// A transient notice that closes itself; never leaves the key tap armed.
     private func flash(_ text: String, spinner: Bool = false) {
-        popover.showMessage(text, topLeft: currentAnchor(), spinner: spinner)
+        popover.showMessage(text, anchor: currentAnchor(), spinner: spinner)
         setActive(false)
         guard !spinner else { return }
         let gen = generation
@@ -553,33 +553,37 @@ final class ProofreadController {
         }
     }
 
-    private func anchor(for issue: TextIssue) -> NSPoint {
+    /// The word's rect in AppKit screen coordinates, so the popup can sit above it. Falls back to
+    /// the field's frame, then to a sliver at the mouse.
+    private func anchor(for issue: TextIssue) -> CGRect {
         let height = primaryScreenHeight()
         if let element = target?.element {
-            if let word = ProofreadAX.wordAnchor(for: issue.range, in: element, primaryHeight: height) {
-                return word
+            if let quartz = ProofreadAX.boundsForRange(issue.range, in: element) {
+                return UnderlineGeometry.appKitRect(fromQuartz: quartz, primaryScreenHeight: height)
             }
-            if let frame = ProofreadAX.frameAnchor(for: element, primaryHeight: height) { return frame }
+            if let quartz = ProofreadAX.frame(of: element) {
+                return UnderlineGeometry.appKitRect(fromQuartz: quartz, primaryScreenHeight: height)
+            }
         }
         return mouseAnchor()
     }
 
-    private func currentAnchor() -> NSPoint {
+    private func currentAnchor() -> CGRect {
         if let issue = issues[safe: currentIndex] { return anchor(for: issue) }
         if let element = target?.element,
-           let frame = ProofreadAX.frameAnchor(for: element, primaryHeight: primaryScreenHeight()) {
-            return frame
+           let quartz = ProofreadAX.frame(of: element) {
+            return UnderlineGeometry.appKitRect(fromQuartz: quartz, primaryScreenHeight: primaryScreenHeight())
         }
         return mouseAnchor()
     }
 
-    private func mouseAnchor() -> NSPoint {
+    private func mouseAnchor() -> CGRect {
         let p = NSEvent.mouseLocation
-        return NSPoint(x: p.x, y: p.y - 18)
+        return CGRect(x: p.x, y: p.y - 8, width: 1, height: 16)
     }
 
-    private func primaryScreenHeight() -> CGFloat? {
-        (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?.frame.height
+    private func primaryScreenHeight() -> CGFloat {
+        (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main)?.frame.height ?? 0
     }
 
     private static func describe(_ error: Error) -> String {

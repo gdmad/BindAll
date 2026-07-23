@@ -249,18 +249,6 @@ enum ProofreadAX {
         return settable.boolValue
     }
 
-    /// A point just below the word at `range`, for anchoring the popup to it.
-    ///
-    /// Only one strategy: ask the element for the range's bounds. Apps that do not answer (many
-    /// Electron and web fields) fall back to the element frame, and the feature still works -- the
-    /// popup is just placed less precisely. `primaryHeight` must be read on the main thread.
-    static func wordAnchor(for range: NSRange, in element: AXUIElement, primaryHeight: CGFloat?) -> NSPoint? {
-        guard let rect = boundsForRange(range, in: element) else { return nil }
-        // Quartz top-left origin -> AppKit bottom-left.
-        let base = primaryHeight ?? rect.maxY
-        return NSPoint(x: rect.minX, y: base - rect.maxY)
-    }
-
     /// Screen bounds of `range` (Quartz, top-left origin); nil when neither the element nor its leaf
     /// text descendants answer (many Electron and web fields keep the geometry on the leaves).
     static func boundsForRange(_ range: NSRange, in element: AXUIElement) -> CGRect? {
@@ -318,15 +306,6 @@ enum ProofreadAX {
             }
         }
         return out
-    }
-
-    /// Bottom-left of the element's frame in AppKit screen coordinates, for placing the panel.
-    /// `primaryHeight` must be read on the main thread (NSScreen is not safe elsewhere).
-    static func frameAnchor(for element: AXUIElement, primaryHeight: CGFloat?) -> NSPoint? {
-        guard let rect = frame(of: element) else { return nil }
-        // Quartz top-left origin -> AppKit bottom-left.
-        let base = primaryHeight ?? rect.maxY
-        return NSPoint(x: rect.minX, y: base - rect.maxY)
     }
 
     /// The element's screen frame (Quartz, top-left origin).

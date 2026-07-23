@@ -10,9 +10,9 @@ import SwiftUI
 final class ProofreadPopover {
     private var panel: NSPanel?
 
-    /// Shows `issue`'s fixes with `selected` highlighted, anchored so its top-left sits at `topLeft`
-    /// (AppKit screen coordinates). `onHover`/`onAccept` receive the row index the mouse is on.
-    func show(issue: TextIssue, selected: Int, position: String, topLeft: NSPoint,
+    /// Shows `issue`'s fixes with `selected` highlighted, placed above `anchor` -- the word's rect in
+    /// AppKit screen coordinates. `onHover`/`onAccept` receive the row index the mouse is on.
+    func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect,
               onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
                                original: issue.original,
@@ -22,27 +22,39 @@ final class ProofreadPopover {
                                position: position,
                                onHover: onHover,
                                onAccept: onAccept)
-        present(AnyView(view), at: topLeft)
+        present(AnyView(view), above: anchor)
     }
 
     /// A one-line notice (checking, no issues, server error) in the same place as the list.
-    func showMessage(_ text: String, topLeft: NSPoint, spinner: Bool = false) {
-        present(AnyView(MessageView(text: text, spinner: spinner)), at: topLeft)
+    func showMessage(_ text: String, anchor: CGRect, spinner: Bool = false) {
+        present(AnyView(MessageView(text: text, spinner: spinner)), above: anchor)
     }
 
     func hide() {
         panel?.orderOut(nil)
     }
 
-    private func present(_ view: AnyView, at topLeft: NSPoint) {
+    private func present(_ view: AnyView, above anchor: CGRect) {
         let host = FirstMouseHostingView(rootView: view)
         let panel = self.panel ?? makePanel()
         panel.contentView = host
         panel.layoutIfNeeded()
         let size = host.fittingSize
         panel.setContentSize(size)
-        panel.setFrameOrigin(clamp(NSPoint(x: topLeft.x, y: topLeft.y - size.height), size: size))
+        panel.setFrameOrigin(origin(for: size, above: anchor))
         panel.orderFront(nil) // NOT makeKey: the text field must keep focus.
+    }
+
+    /// Sits above the word, so the popup never covers what it is about; drops below it only when
+    /// there is no room above (a problem word on the top line of the screen).
+    private func origin(for size: NSSize, above anchor: CGRect) -> NSPoint {
+        let gap: CGFloat = 6
+        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? .zero
+        let above = anchor.maxY + gap
+        let below = anchor.minY - gap - size.height
+        let y = (above + size.height <= visible.maxY - 4 || below < visible.minY + 4) ? above : below
+        return clamp(NSPoint(x: anchor.minX, y: y), size: size)
     }
 
     private func makePanel() -> NSPanel {
@@ -60,10 +72,10 @@ final class ProofreadPopover {
         return panel
     }
 
-    /// Keeps the popup on the screen holding the anchor.
+    /// Keeps the popup on the screen holding it.
     private func clamp(_ origin: NSPoint, size: NSSize) -> NSPoint {
-        let anchor = NSPoint(x: origin.x, y: origin.y + size.height)
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(anchor) }) ?? NSScreen.main else {
+        let probe = NSPoint(x: origin.x, y: origin.y + size.height / 2)
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(probe) }) ?? NSScreen.main else {
             return origin
         }
         let v = screen.visibleFrame
