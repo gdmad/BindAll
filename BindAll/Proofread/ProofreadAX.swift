@@ -29,37 +29,91 @@ enum ProofreadAX {
     /// Reads the focused field. Unlike autocomplete, a non-empty selection is fine: it means the user
     /// wants that range checked.
     static func focus() -> ProofSource {
+        guard let focused = focusedElement() else { return .none }
+        if isSecure(focused) { return .none }
+
+        // The focused element is not always the one holding the text: web areas and composite
+        // controls hand the text to a nested element, and a click can land on a wrapper.
+        for candidate in textCandidates(around: focused) {
+            guard !isSecure(candidate),
+                  let text = currentText(of: candidate), !text.isEmpty else { continue }
+
+            var selection = NSRange(location: (text as NSString).length, length: 0)
+            if let range = selectedRange(of: candidate) { selection = range }
+
+            var pid: pid_t = 0
+            AXUIElementGetPid(candidate, &pid)
+            return .axField(ProofTarget(element: candidate, pid: pid, text: text,
+                                        caret: selection.location, selection: selection))
+        }
+
+        // No readable field text, but the app may still expose the selection (many web views do).
+        if let selected = selectedText(of: focused),
+           !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .selectionOnly(selected)
+        }
+        return .none
+    }
+
+    /// The system-wide focused element.
+    static func focusedElement() -> AXUIElement? {
         let system = AXUIElementCreateSystemWide()
         var focused: AnyObject?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let f = focused else { return .none }
-        let element = f as! AXUIElement
+              let f = focused else { return nil }
+        return (f as! AXUIElement)
+    }
 
-        // Never proofread a password field.
+    /// Elements that may hold the field's text, nearest first: the focused element itself, its own
+    /// focused descendant, text children, then a text parent.
+    static func textCandidates(around element: AXUIElement) -> [AXUIElement] {
+        var out = [element]
+
+        var nestedRef: AnyObject?
+        if AXUIElementCopyAttributeValue(element, kAXFocusedUIElementAttribute as CFString, &nestedRef) == .success,
+           let nested = nestedRef {
+            out.append(nested as! AXUIElement)
+        }
+
+        var childrenRef: AnyObject?
+        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+           let children = childrenRef as? [AXUIElement] {
+            out.append(contentsOf: children.prefix(10).filter(isTextRole))
+        }
+
+        var parentRef: AnyObject?
+        if AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parentRef) == .success,
+           let parent = parentRef {
+            let p = parent as! AXUIElement
+            if isTextRole(p) { out.append(p) }
+        }
+        return out
+    }
+
+    static func role(of element: AXUIElement) -> String? {
+        var roleRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success else {
+            return nil
+        }
+        return roleRef as? String
+    }
+
+    static func subrole(of element: AXUIElement) -> String? {
         var subroleRef: AnyObject?
-        if AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef) == .success,
-           let subrole = subroleRef as? String, subrole == (kAXSecureTextFieldSubrole as String) {
-            return .none
+        guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRef) == .success else {
+            return nil
         }
+        return subroleRef as? String
+    }
 
-        var valueRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-              let text = valueRef as? String, !text.isEmpty else { return .none }
+    private static func isTextRole(_ element: AXUIElement) -> Bool {
+        guard let role = role(of: element) else { return false }
+        return role == (kAXTextAreaRole as String) || role == (kAXTextFieldRole as String)
+    }
 
-        var selection = NSRange(location: (text as NSString).length, length: 0)
-        var rangeRef: AnyObject?
-        if AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success {
-            var cfRange = CFRange()
-            if AXValueGetValue(rangeRef as! AXValue, .cfRange, &cfRange) {
-                selection = NSRange(location: cfRange.location, length: cfRange.length)
-            }
-        }
-
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-
-        return .axField(ProofTarget(element: element, pid: pid, text: text,
-                                    caret: selection.location, selection: selection))
+    /// Never proofread a password field.
+    private static func isSecure(_ element: AXUIElement) -> Bool {
+        subrole(of: element) == (kAXSecureTextFieldSubrole as String)
     }
 
     /// Re-reads the element's current text, for validating an issue before applying its fix.
