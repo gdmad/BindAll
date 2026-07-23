@@ -57,6 +57,13 @@ enum ProofreadDiagnostics {
             } else {
                 lines.append("Word coordinates: NO - this app cannot show underlines (fixes still work)")
             }
+            var paramNames: CFArray?
+            if AXUIElementCopyParameterizedAttributeNames(target.element, &paramNames) == .success,
+               let names = paramNames as? [String] {
+                lines.append("Parameterized attributes: \(names.isEmpty ? "none" : names.joined(separator: ", "))")
+            } else {
+                lines.append("Parameterized attributes: unavailable")
+            }
             if let frame = ProofreadAX.frame(of: target.element) {
                 lines.append("Field frame: \(Int(frame.origin.x)),\(Int(frame.origin.y)) \(Int(frame.width))x\(Int(frame.height))")
             } else {

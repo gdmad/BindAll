@@ -19,7 +19,7 @@ enum IssueApplier {
     /// The field is always re-read first: the user may have kept typing while the panel was open, and
     /// writing to a stale range would corrupt unrelated text.
     static func apply(_ issue: TextIssue, replacement: String, element: AXUIElement, pid: pid_t,
-                      restoreClipboard: Bool) -> Result {
+                      restoreClipboard: Bool) async -> Result {
         guard let text = ProofreadAX.currentText(of: element) else { return .failed("Cannot read the field.") }
         guard let range = IssueMerger.relocate(issue, in: text) else { return .stale }
 
@@ -44,14 +44,12 @@ enum IssueApplier {
         guard ProofreadAX.select(range, in: element) else {
             return .failed("This app does not support in-place fixes.")
         }
-        // select() returning success does not mean the selection took (Chromium can no-op): read it
-        // back before pasting, or Cmd+V would land at the caret instead of over the issue. The
-        // selected *text* is the strong signal; the range is only consulted when the text is
-        // unreadable, because Chromium's range read-back can lag behind the selection it just made.
-        if let selectedText = ProofreadAX.selectedText(of: element) {
-            guard selectedText == issue.original else { return .stale }
-        } else if let selected = ProofreadAX.selectedRange(of: element) {
-            guard selected == range else { return .stale }
+        // select() returning success does not mean the selection took: Chromium updates its
+        // accessibility cache straight away while the editor's real selection lands a moment later,
+        // so pasting immediately can overwrite whatever was selected *before* -- the previous issue.
+        // Wait for the selected text to actually read back as this issue's text before pasting.
+        guard await selectionSettled(on: element, equals: issue.original, range: range) else {
+            return .stale
         }
         // The paste itself is fire-and-forget (it lands ~0.05-0.3 s later); FocusTarget re-activates
         // the app first and waits longer when it was not frontmost.
@@ -59,6 +57,28 @@ enum IssueApplier {
                                       target: TextInjector.FocusTarget(
                                           app: NSRunningApplication(processIdentifier: pid)))
         return .applied(replacedRange: range)
+    }
+
+    /// Waits (briefly) until the field reports `original` as its selected text, so the paste can
+    /// only land on the issue we mean. Two consecutive matching reads are required: a single one can
+    /// still be Chromium's cache echoing the range we just wrote back at us.
+    private static func selectionSettled(on element: AXUIElement, equals original: String,
+                                         range: NSRange) async -> Bool {
+        var confirmations = 0
+        for attempt in 0..<8 {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 40_000_000) }
+            if let selected = ProofreadAX.selectedText(of: element) {
+                confirmations = selected == original ? confirmations + 1 : 0
+                if confirmations >= 2 { return true }
+            } else if let selectedRange = ProofreadAX.selectedRange(of: element) {
+                // No readable selected text; the range is all we have to go on.
+                confirmations = selectedRange == range ? confirmations + 1 : 0
+                if confirmations >= 2 { return true }
+            } else {
+                return true // the app exposes neither; nothing left to check against
+            }
+        }
+        return false
     }
 
     /// Confirms Path A actually wrote the text: some elements report success and change nothing.

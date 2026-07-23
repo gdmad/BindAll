@@ -52,6 +52,8 @@ final class ProofreadController {
 
     /// The last server error, so live checking reports it once instead of on every pause.
     private var lastError: String?
+    /// True while a fix is being applied (the applier waits for the app's selection to settle).
+    private var isApplying = false
 
     /// For the diagnostics report.
     var liveIssueCount: Int { issues.count }
@@ -295,6 +297,7 @@ final class ProofreadController {
     }
 
     private func accept() {
+        guard !isApplying else { return } // applying waits for the selection to settle; ignore repeats
         guard let issue = issues[safe: currentIndex],
               let replacement = issue.replacements[safe: selectedReplacement] else { skip(); return }
         guard let target else {
@@ -304,8 +307,19 @@ final class ProofreadController {
             return
         }
 
-        switch IssueApplier.apply(issue, replacement: replacement, element: target.element,
-                                  pid: target.pid, restoreClipboard: config.restoreClipboard) {
+        isApplying = true
+        Task { @MainActor [weak self] in
+            let result = await IssueApplier.apply(issue, replacement: replacement,
+                                                  element: target.element, pid: target.pid,
+                                                  restoreClipboard: self?.config.restoreClipboard ?? false)
+            guard let self else { return }
+            self.isApplying = false
+            self.handleApplyResult(result, issue: issue, replacement: replacement)
+        }
+    }
+
+    private func handleApplyResult(_ result: IssueApplier.Result, issue: TextIssue, replacement: String) {
+        switch result {
         case .applied(let replacedRange):
             // Slide the remaining ranges locally instead of re-checking: the server round trip would
             // cost a second per fix, and the arithmetic is exact. Shift from the range the applier
