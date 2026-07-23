@@ -164,16 +164,18 @@ private final class UnderlineView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         for segment in segments {
             let points = UnderlineGeometry.squigglePoints(width: segment.rect.width,
-                                                          amplitude: 1.5, wavelength: 4)
+                                                          amplitude: 2.5, wavelength: 5)
             guard points.count > 1 else { continue }
             let path = NSBezierPath()
-            path.lineWidth = 1
+            path.lineWidth = 2.5
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
             path.move(to: NSPoint(x: segment.rect.minX + points[0].x,
                                   y: segment.rect.minY + points[0].y))
             for p in points.dropFirst() {
                 path.line(to: NSPoint(x: segment.rect.minX + p.x, y: segment.rect.minY + p.y))
             }
-            segment.color.withAlphaComponent(0.8).setStroke()
+            segment.color.withAlphaComponent(0.95).setStroke()
             path.stroke()
         }
     }

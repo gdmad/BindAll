@@ -131,7 +131,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             ("Quick Translate", HotkeyFormatter.string(s.quickTranslateHotkey), #selector(menuQuickTranslate)),
         ]
         if s.correctEnabled {
-            actions.append(("Proofread (LanguageTool)", HotkeyFormatter.string(s.correctHotkey), #selector(menuProofread)))
             actions.append(("Proofread diagnostics…", "", #selector(menuProofreadDiagnostics)))
         }
 
@@ -255,7 +254,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func menuTranslate() { coordinator.menuTranslate() }
     @objc private func menuScreenTranslate() { coordinator.menuScreenTranslate() }
     @objc private func menuQuickTranslate() { coordinator.menuQuickTranslate() }
-    @objc private func menuProofread() { coordinator.menuProofread() }
     @objc private func menuProofreadDiagnostics() { coordinator.menuProofreadDiagnostics() }
 }
 

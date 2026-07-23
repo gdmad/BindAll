@@ -82,15 +82,17 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Cmd+C ×3** → translate the selection, shown in a popup near the cursor
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
 - **Shift+Cmd+E** → Quick Translate window
-- **Proofread** (LanguageTool), only when enabled in Settings → General, works live: a pause in
-  typing (~1.2 s) re-checks the focused field and underlines every issue in place (squiggles;
-  spelling is purple so it is not mistaken for the red one macOS draws). Clicking a problem word
-  shows its fixes instantly -- the issues are already known, no round trip. **Shift+Cmd+C** steps
-  through them from the first: arrows or mouse hover choose, Return or a click applies, Tab skips,
-  Esc closes the popup (the underlines stay). The number of fixes listed per issue is a setting
+- **Proofread** (LanguageTool), only when enabled in Settings → General, has **no shortcut**: a
+  pause in typing (~1.2 s) re-checks the focused field and underlines every issue in place
+  (squiggles; spelling is purple so it is not mistaken for the red one macOS draws). Clicking an
+  underlined word shows its fixes instantly -- the issues are already known, no round trip. In the
+  popup: arrows or mouse hover choose, Return or a click applies, Tab moves to the next issue,
+  Esc closes it (the underlines stay). The number of fixes listed per issue is a setting
   (1-10, default 3). Underlines follow scrolling and window moves, go down while typing and come
   back with the fresh result, and disappear on an app switch. Apps that expose no word coordinates
   (many Electron/web fields) get no underlines; the popup still works if their text is readable.
+  Chromium-based apps only build an accessibility tree when asked, so `ProofreadAX` sets
+  `AXManualAccessibility` on the frontmost process once (`enableElectronAccessibilityIfNeeded`).
   «Proofread diagnostics…» in the menu bar reports what Accessibility exposes for a given field.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.

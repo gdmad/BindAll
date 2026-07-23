@@ -147,9 +147,8 @@ final class HotkeyCoordinator: ObservableObject {
 
     private func reconfigureWatched() {
         let s = appState.settings
-        var configs = [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey]
+        let configs = [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey]
             + s.actionKeys.compactMap(\.hotkey)
-        if s.correctEnabled { configs.append(s.correctHotkey) }
 
         // Group configs that share key+modifiers so the monitor knows the highest press count to
         // expect for that key and can fire immediately once it is reached.
@@ -181,13 +180,6 @@ final class HotkeyCoordinator: ObservableObject {
         // even while another action is in flight.
         if matches(s.quickTranslateHotkey) {
             quickTranslate.toggle()
-            return
-        }
-
-        // Proofread drives its own popup and does not occupy the engine pipeline, so like Quick
-        // Translate it stays available while another action is in flight.
-        if s.correctEnabled, matches(s.correctHotkey) {
-            proofread.run()
             return
         }
 
@@ -343,12 +335,6 @@ final class HotkeyCoordinator: ObservableObject {
     func menuTranslate() { runFromMenu(.translate) }
     func menuScreenTranslate() { translateFromScreen() }
 
-    /// Runs after a short delay so the menu dismisses and focus returns to the user's field first --
-    /// otherwise the focused element we would read is the menu, not their text.
-    func menuProofread() {
-        guard appState.settings.correctEnabled else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.proofread.run() }
-    }
     func menuQuickTranslate() { quickTranslate.toggle() }
 
     /// Reports what Accessibility exposes for the field the user focuses next. The delay gives them
@@ -357,7 +343,8 @@ final class HotkeyCoordinator: ObservableObject {
         popup.show(title: "Proofread diagnostics", text: "Click into the text field you want to test. Reading it in 3 seconds…")
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self else { return }
-            let report = ProofreadDiagnostics.report(liveIssueCount: self.proofread.liveIssueCount)
+            let report = ProofreadDiagnostics.report(liveIssueCount: self.proofread.liveIssueCount,
+                                                     error: self.proofread.lastCheckError)
             self.popup.show(title: "Proofread diagnostics", text: report)
         }
     }

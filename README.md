@@ -40,9 +40,10 @@ No Dock icon: BindAll lives in the menu bar (`LSUIElement`).
 - **Quick Translate** — a window to type text and translate it on the fly, with a Source/Target
   language pair and swap.
 - **OCR translate** — drag-select a screen region; text is recognized (Vision) and translated.
-- **Correct (LanguageTool)** — optional: a dedicated shortcut that fixes grammar and spelling in the
-  selection via a [LanguageTool](https://languagetool.org) server (public, self-hosted, or Premium).
-  Enable it in Settings → General; configure the server in Providers.
+- **Proofread (LanguageTool)** — optional: shortly after you pause typing, the focused field is
+  checked by a [LanguageTool](https://languagetool.org) server (public, self-hosted, or Premium) and
+  every issue is underlined in place. Click an underlined word to pick a fix; Tab moves to the next
+  issue. No shortcut involved. Enable it in Settings → General; configure it on the Proofread tab.
 - **Providers** — Apple on-device (default), DeepSeek, OpenRouter, OpenAI, Ollama. Add an API key,
   pick a model, Test connection. OpenRouter has a "free models only" filter.
 - **History** — the last results are kept locally and reachable from the menu bar (click to copy).
@@ -63,7 +64,6 @@ All shortcuts are configurable in Settings → Actions → Shortcuts.
 | `Cmd+C` ×3 | Translate the selection (popup) |
 | `Cmd+E` | OCR: select a screen region and translate it |
 | `Shift+Cmd+E` | Open Quick Translate |
-| `Shift+Cmd+C` | Correct with LanguageTool (when enabled) |
 | `Esc` | Cancel the action in progress |
 
 Because `Cmd+C` is the real copy shortcut, pressing it the configured number of times both copies the

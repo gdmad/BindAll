@@ -10,14 +10,14 @@ struct ProofreadSettingsView: View {
         Form {
             Section {
                 Toggle(isOn: $appState.settings.proofreadAutoOnClick) {
-                    helpHeader("Show fixes when I click a word", "Click inside a word with a problem and the list of fixes appears under it, with no shortcut. Double-clicking a word works too; long selections are ignored, so selecting a paragraph to copy it stays quiet.")
+                    helpHeader("Show fixes when I click a word", "Click inside an underlined word and the list of fixes appears under it. Double-clicking a word works too; long selections are ignored, so selecting a paragraph to copy it stays quiet. Turn this off to keep the underlines without the popup.")
                 }
                 Stepper("Fixes shown per issue: \(appState.settings.proofreadMaxReplacements)",
                         value: $appState.settings.proofreadMaxReplacements, in: 1...10)
                 Stepper("Check text longer than: \(appState.settings.proofreadMinLength) characters",
                         value: $appState.settings.proofreadMinLength, in: 1...100)
             } header: {
-                helpHeader("Proofread", "Press the Proofread shortcut in any text field: BindAll checks the whole field with LanguageTool, selects the first problem and shows the fixes under it. Arrows or the mouse choose, Return or a click applies, Tab skips to the next one, Esc exits. Skipped in password fields.\n\nThe whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
+                helpHeader("Proofread", "Shortly after you stop typing, BindAll checks the focused field with LanguageTool and underlines the issues it finds. Click an underlined word to see the fixes: arrows or the mouse choose, Return or a click applies, Tab moves to the next issue, Esc closes the popup. There is no shortcut. Skipped in password fields.\n\nThe whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
             }
 
             LanguageToolConnectionSection()

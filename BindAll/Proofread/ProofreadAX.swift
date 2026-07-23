@@ -29,6 +29,7 @@ enum ProofreadAX {
     /// Reads the focused field. Unlike autocomplete, a non-empty selection is fine: it means the user
     /// wants that range checked.
     static func focus() -> ProofSource {
+        enableElectronAccessibilityIfNeeded()
         guard let focused = focusedElement() else { return .none }
         if isSecure(focused) { return .none }
 
@@ -53,6 +54,20 @@ enum ProofreadAX {
             return .selectionOnly(selected)
         }
         return .none
+    }
+
+    /// Chromium-based apps (Electron: Slack, VS Code, Discord…) build their accessibility tree only
+    /// when an assistive app asks for it, via the private `AXManualAccessibility` attribute. Without
+    /// this their fields expose no text and no word coordinates at all. Done once per process.
+    private static var accessibilityEnabledPids = Set<pid_t>()
+
+    static func enableElectronAccessibilityIfNeeded() {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              !accessibilityEnabledPids.contains(pid) else { return }
+        accessibilityEnabledPids.insert(pid)
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
     }
 
     /// The system-wide focused element.

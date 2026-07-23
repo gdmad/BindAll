@@ -6,9 +6,11 @@ import ApplicationServices
 /// text, or no word coordinates (which is what underlining needs).
 enum ProofreadDiagnostics {
     /// Collects the report. Call on the main thread, with the field the user wants to test focused.
-    static func report(liveIssueCount: Int) -> String {
+    static func report(liveIssueCount: Int, error: String?) -> String {
         var lines: [String] = []
         lines.append("Accessibility trusted: \(AXIsProcessTrusted())")
+        // Chromium/Electron builds its tree only when asked; do it before reading anything.
+        ProofreadAX.enableElectronAccessibilityIfNeeded()
 
         if let app = NSWorkspace.shared.frontmostApplication {
             lines.append("Frontmost app: \(app.localizedName ?? "?") (\(app.bundleIdentifier ?? "no bundle id"), pid \(app.processIdentifier))")
@@ -57,6 +59,7 @@ enum ProofreadDiagnostics {
         }
 
         lines.append("Issues currently underlined: \(liveIssueCount)")
+        if let error { lines.append("Last check error: \(error)") }
         return lines.joined(separator: "\n")
     }
 }

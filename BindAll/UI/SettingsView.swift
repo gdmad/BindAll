@@ -80,7 +80,7 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.correctEnabled) {
-                    helpHeader("Enable Proofread", "Adds a shortcut that checks the focused text field with a LanguageTool server and walks you through the issues one at a time: the word is selected in place and a list of fixes appears under it (arrows choose, Return applies, Tab skips, Esc exits). Set the shortcut on the Actions tab; the server and everything else live on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
+                    helpHeader("Enable Proofread", "Checks the text field you are typing in with a LanguageTool server shortly after you pause, and underlines every issue in place. Click an underlined word to see the fixes (arrows or the mouse choose, Return or a click applies, Tab moves to the next issue, Esc closes). Configure it all on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
                 }
             } header: {
                 Text("Proofread (LanguageTool)")
@@ -278,29 +278,22 @@ struct ShortcutsSection: View {
     var body: some View {
         let s = appState.settings
         let keyShortcuts = s.actionKeys.compactMap(\.hotkey)
-        let optional: [HotkeyConfig] = s.correctEnabled ? [s.correctHotkey] : []
         Section {
             LabeledContent("Default action") {
                 ShortcutRecorder(config: $appState.settings.defaultActionHotkey,
-                                 others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + optional + keyShortcuts)
+                                 others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
             }
             LabeledContent("Translate selection") {
                 ShortcutRecorder(config: $appState.settings.translateHotkey,
-                                 others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + optional + keyShortcuts)
+                                 others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
             }
             LabeledContent("Translate from screen (OCR)") {
                 ShortcutRecorder(config: $appState.settings.screenTranslateHotkey,
-                                 others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + optional + keyShortcuts)
+                                 others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + keyShortcuts)
             }
             LabeledContent("Quick Translate") {
                 ShortcutRecorder(config: $appState.settings.quickTranslateHotkey,
-                                 others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + optional + keyShortcuts)
-            }
-            if s.correctEnabled {
-                LabeledContent("Proofread (LanguageTool)") {
-                    ShortcutRecorder(config: $appState.settings.correctHotkey,
-                                     others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
-                }
+                                 others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + keyShortcuts)
             }
         } header: {
             helpHeader("Shortcuts", "Click a field and press the keys. Press the same combo several times for a repeat trigger (shown as e.g. Cmd+C+C). The default Cmd+C also copies, so the selection is captured automatically.")

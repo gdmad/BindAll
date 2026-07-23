@@ -50,8 +50,12 @@ final class ProofreadController {
     private var keyMonitor: Any?
     private var typingDebounce: DispatchWorkItem?
 
+    /// The last server error, so live checking reports it once instead of on every pause.
+    private var lastError: String?
+
     /// For the diagnostics report.
     var liveIssueCount: Int { issues.count }
+    var lastCheckError: String? { lastError }
 
     // Key interception, alive only while the popup is up.
     private var tap: CFMachPort?
@@ -120,36 +124,9 @@ final class ProofreadController {
     }
 
     // MARK: - Entry points
-
-    /// The Proofread shortcut: step through the issues, starting at the first one. Uses what the
-    /// live pass already found; only checks the server when the text moved on since then.
-    func run() {
-        guard config.enabled, AccessibilityPermission.isGranted, appAllowed() else { return }
-        endNavigation()
-
-        switch ProofreadAX.focus() {
-        case .axField(let found):
-            target = found
-            if !issues.isEmpty, found.text == lastCheckedText {
-                focusIssue(0)
-                return
-            }
-            check(text: found.text, offset: 0, startAtFirst: true)
-        case .selectionOnly(let text):
-            clearLive()
-            check(text: text, offset: 0, startAtFirst: true)
-        case .none:
-            // No AX text (Electron, some web fields): fall back to whatever is selected. Fixes then
-            // go back through paste rather than in place.
-            guard let selection = SelectionReader.copyCurrentSelection(),
-                  !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                flash("Select some text, or focus a text field.")
-                return
-            }
-            clearLive()
-            check(text: selection, offset: 0, startAtFirst: true)
-        }
-    }
+    //
+    // There is no shortcut: checking happens on its own after a pause in typing, and the fixes are
+    // opened by clicking a underlined word. Tab still moves to the next issue while the popup is up.
 
     /// Mouse-up: show the fixes for the clicked word. When the live pass already checked this text
     /// the popup opens instantly; otherwise the click doubles as a check request.
@@ -178,7 +155,7 @@ final class ProofreadController {
             showFixes(overlapping: probe) // already known: no round trip
             return
         }
-        check(text: found.text, offset: 0, startAtFirst: false, selection: probe)
+        check(text: found.text, offset: 0, selection: probe)
     }
 
     /// Typing paused: re-check the focused field so the underlines match what is on screen now.
@@ -199,21 +176,19 @@ final class ProofreadController {
         }
         if !sameField { issues = [] }
         // Paragraph cache keeps this to one request for the paragraph actually edited.
-        check(text: found.text, offset: 0, startAtFirst: false, selection: nil)
+        check(text: found.text, offset: 0)
     }
 
     // MARK: - Checking
 
-    /// - Parameters:
-    ///   - startAtFirst: true for the shortcut (start at issue 0); false for the auto popup, which
-    ///     only shows something if `selection` actually landed on an issue.
-    private func check(text: String, offset: Int, startAtFirst: Bool, selection: NSRange? = nil) {
+    /// Checks `text`; `selection`, when given, is the word the user clicked and decides whether the
+    /// fixes pop up afterwards. Checking is always in the background now, so nothing is shown while
+    /// it runs -- only a server error the user has not seen yet.
+    private func check(text: String, offset: Int, selection: NSRange? = nil) {
         guard let provider else { return }
         generation &+= 1
         let gen = generation
         checkTask?.cancel()
-
-        if startAtFirst { flash("Checking...", spinner: true) }
 
         checkTask = Task { [weak self] in
             guard let self else { return }
@@ -221,27 +196,27 @@ final class ProofreadController {
                 let found = try await provider.check(text)
                 guard !Task.isCancelled, gen == self.generation else { return }
                 let rebased = offset == 0 ? found : ProofreadCache.rebase(found, to: offset)
-                self.applyResults(rebased, startAtFirst: startAtFirst, selection: selection)
+                self.lastError = nil
+                self.applyResults(rebased, selection: selection)
             } catch {
                 guard !Task.isCancelled, gen == self.generation else { return }
-                // Only complain when the user asked for a check; the auto path stays quiet.
-                if startAtFirst { self.flash(Self.describe(error)) }
+                // Live checking runs unprompted, so report a problem once rather than on every pause.
+                let message = Self.describe(error)
+                if message != self.lastError {
+                    self.lastError = message
+                    self.flash(message)
+                }
             }
         }
     }
 
-    private func applyResults(_ found: [TextIssue], startAtFirst: Bool, selection: NSRange?) {
+    private func applyResults(_ found: [TextIssue], selection: NSRange?) {
         // Cap once at the door so the popup, arrow navigation and accept all see the same list.
         issues = IssueMerger.capReplacements(found, limit: config.maxReplacements)
         lastCheckedText = target?.text ?? ""
         redrawUnderlines()
 
-        if startAtFirst {
-            guard !issues.isEmpty else { flash("No issues found."); return }
-            focusIssue(0)
-            return
-        }
-        // Live/click path: the popup only opens for a clicked word that sits on an issue.
+        // The popup only opens for a clicked word that sits on an issue.
         guard let selection else { return }
         showFixes(overlapping: selection)
     }
