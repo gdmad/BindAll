@@ -72,6 +72,8 @@ BindAll/
     ├── ActionKey.swift         # {key, label, prompt, hotkey?}; built-in w / u / l / о / гг
     ├── KeychainStore.swift     # API keys (generic password)
     └── LoginItemManager.swift  # SMAppService launch-at-login
+docs/
+└── proofread-app-testing.md    # the per-app pass to run before adding to ProofreadSupport
 Tests/
 ├── main.swift                  # PromptParser + MaskAISlop assertions (no XCTest host needed)
 └── run_tests.sh
@@ -97,7 +99,8 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   `AXManualAccessibility` on the frontmost process once (`enableElectronAccessibilityIfNeeded`).
   «Proofread diagnostics…» in the menu bar reports what Accessibility exposes for a given field.
   The Proofread tab's "Supported apps" section lists the apps the feature has actually been verified in; that list is
-  `ProofreadSupport.verified` and is extended by hand after testing an app, never automatically.
+  `ProofreadSupport.verified` and is extended by hand after testing an app, never automatically --
+  the pass to run before adding one is `docs/proofread-app-testing.md`.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (off by default; enable on General, configure on the Autocomplete
