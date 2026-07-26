@@ -24,35 +24,6 @@ struct ProofreadSettingsView: View {
             LanguageToolConnectionSection()
 
             Section {
-                ForEach(ProofreadSupport.verified, id: \.bundleID) { app in
-                    LabeledContent {
-                        switch app.level {
-                        case .full:
-                            Label("Underlines and fixes", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .labelStyle(.titleAndIcon)
-                        case .fixesOnly:
-                            Label("Fixes only", systemImage: "text.badge.checkmark")
-                                .foregroundStyle(.orange)
-                                .labelStyle(.titleAndIcon)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(app.name)
-                            if let note = app.note {
-                                Text(note).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                Text("Other apps usually work too, as long as they expose their text to macOS. To check one, use \"Proofread diagnostics\" in the menu bar.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } header: {
-                helpHeader("Tested apps", "Apps this feature has been verified in. \"Underlines and fixes\" means everything works. \"Fixes only\" means the app exposes its text but not the position of its words, so the fixes popup works while the underlines cannot be drawn.")
-            }
-
-            Section {
                 Picker("Check in", selection: deferredWrite($appState.settings.proofreadAppMode)) {
                     Text("All apps").tag("all")
                     Text("Only selected apps").tag("allow")
@@ -80,6 +51,32 @@ struct ProofreadSettingsView: View {
                 }
             } header: {
                 Text("Apps")
+            }
+
+            Section {
+                ForEach(ProofreadSupport.verified, id: \.bundleID) { app in
+                    LabeledContent {
+                        switch app.level {
+                        case .full:
+                            Label("Underlines and fixes", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .labelStyle(.titleAndIcon)
+                        case .fixesOnly:
+                            Label("Fixes only", systemImage: "text.badge.checkmark")
+                                .foregroundStyle(.orange)
+                                .labelStyle(.titleAndIcon)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(app.name)
+                            if let note = app.note {
+                                Text(note).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                helpHeader("Supported apps", "Apps this feature has been verified in. \"Underlines and fixes\" means everything works. \"Fixes only\" means the app exposes its text but not the position of its words, so the fixes popup works while the underlines cannot be drawn.\n\nOther apps usually work too, as long as they expose their text to macOS; to check one, use \"Proofread diagnostics\" in the menu bar.")
             }
         }
         .formStyle(.grouped)

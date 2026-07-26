@@ -96,7 +96,7 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   Chromium-based apps only build an accessibility tree when asked, so `ProofreadAX` sets
   `AXManualAccessibility` on the frontmost process once (`enableElectronAccessibilityIfNeeded`).
   «Proofread diagnostics…» in the menu bar reports what Accessibility exposes for a given field.
-  The Proofread tab lists the apps the feature has actually been verified in; that list is
+  The Proofread tab's "Supported apps" section lists the apps the feature has actually been verified in; that list is
   `ProofreadSupport.verified` and is extended by hand after testing an app, never automatically.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.

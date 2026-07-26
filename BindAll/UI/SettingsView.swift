@@ -102,15 +102,16 @@ struct GeneralSettingsView: View {
                 Toggle(isOn: $appState.settings.maskAISlop) {
                     helpHeader("Mask AI Slop", "Normalizes typical 'AI' typography in results: em/en dashes become '-', smart quotes and apostrophes become straight ones, and emoji and unusual unicode are stripped.")
                 }
-                LabeledContent {
-                    Stepper("\(appState.settings.popupFontSize) pt",
-                            value: $appState.settings.popupFontSize, in: 10...20)
-                } label: {
-                    helpHeader("Popup text size", "Text size in the floating popups: the autocomplete suggestions and the proofread fixes.")
-                }
                 Toggle(isOn: $appState.settings.historyEnabled) {
                     helpHeader("Keep history", "Stores the last 50 results locally (menu bar > History) so a closed popup or overwritten paste can be recovered. Stored on this Mac only; never includes API keys.")
                 }
+            }
+
+            Section {
+                Stepper("Text size: \(appState.settings.popupFontSize) pt",
+                        value: $appState.settings.popupFontSize, in: 10...20)
+            } header: {
+                helpHeader("Popups", "The floating popups: autocomplete suggestions and proofread fixes. Both use this text size.")
             }
 
             Section {
@@ -147,6 +148,8 @@ struct ActionsSettingsView: View {
 
     var body: some View {
         Form {
+            ShortcutsSection()
+
             Section {
                 TextEditor(text: deferredWrite($appState.settings.defaultPrompt))
                     .font(.body)
@@ -177,8 +180,6 @@ struct ActionsSettingsView: View {
             } header: {
                 helpHeader("Action keys", "Short keys you type after the separator. The instruction is sent to the AI for the text before the separator. A key can also get its own global shortcut (Record Shortcut in the expanded row): pressing it runs the instruction on the current selection directly, no separator needed.")
             }
-
-            ShortcutsSection()
         }
         .formStyle(.grouped)
         .clearFocusOnAppear()
