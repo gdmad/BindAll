@@ -436,23 +436,27 @@ check(IssueMerger.capReplacements([capIssue], limit: 0)[0].replacements == ["one
 check(IssueMerger.capReplacements([capIssue], limit: 99)[0].replacements.count == 5,
       "limit above 10 is clamped to 10 (list shorter anyway)")
 
-print("Settings proofread keys")
+print("Settings proofread and popup keys")
 func decodeSettings(_ json: String) -> Settings {
     try! JSONDecoder().decode(Settings.self, from: json.data(using: .utf8)!)
 }
 let sDefaults = decodeSettings("{}")
-check(sDefaults.proofreadAutoOnClick == true, "missing key defaults auto-on-click to true")
 check(sDefaults.proofreadMaxReplacements == 3, "missing key defaults max replacements to 3")
-let sLegacy = decodeSettings(#"{"proofreadAutoOnSelection": false}"#)
-check(sLegacy.proofreadAutoOnClick == false, "legacy proofreadAutoOnSelection key still honoured")
-let sBoth = decodeSettings(#"{"proofreadAutoOnSelection": false, "proofreadAutoOnClick": true}"#)
-check(sBoth.proofreadAutoOnClick == true, "new key wins over the legacy one")
+check(sDefaults.popupFontSize == 13, "missing key defaults the popup font size to 13")
+// autocompleteFontSize is the old name; the setting now drives both popups.
+check(decodeSettings(#"{"autocompleteFontSize": 17}"#).popupFontSize == 17,
+      "legacy autocompleteFontSize key still honoured")
+check(decodeSettings(#"{"autocompleteFontSize": 17, "popupFontSize": 11}"#).popupFontSize == 11,
+      "new popupFontSize key wins over the legacy one")
+// Keys of removed settings must not break decoding of everything else.
+check(decodeSettings(#"{"proofreadAutoOnClick": false, "proofreadMaxReplacements": 5}"#).proofreadMaxReplacements == 5,
+      "a removed key is ignored without losing the rest")
 var sRound = Settings()
-sRound.proofreadAutoOnClick = false
+sRound.popupFontSize = 18
 sRound.proofreadMaxReplacements = 7
 let sBack = try! JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(sRound))
-check(sBack.proofreadAutoOnClick == false && sBack.proofreadMaxReplacements == 7,
-      "encode/decode round-trip preserves the new keys")
+check(sBack.popupFontSize == 18 && sBack.proofreadMaxReplacements == 7,
+      "encode/decode round-trip preserves the keys")
 print("LanguageToolMode.defaultURL")
 eq(LanguageToolMode.free.defaultURL ?? "", "https://api.languagetool.org/v2", "free presets the public URL")
 eq(LanguageToolMode.premium.defaultURL ?? "", "https://api.languagetoolplus.com/v2", "premium presets the plus URL")

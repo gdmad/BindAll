@@ -9,15 +9,16 @@ struct ProofreadSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: $appState.settings.proofreadAutoOnClick) {
-                    helpHeader("Show fixes when I click a word", "Click inside an underlined word and the list of fixes appears under it. Double-clicking a word works too; long selections are ignored, so selecting a paragraph to copy it stays quiet. Turn this off to keep the underlines without the popup.")
-                }
                 Stepper("Fixes shown per issue: \(appState.settings.proofreadMaxReplacements)",
                         value: $appState.settings.proofreadMaxReplacements, in: 1...10)
-                Stepper("Check text longer than: \(appState.settings.proofreadMinLength) characters",
-                        value: $appState.settings.proofreadMinLength, in: 1...100)
+                LabeledContent {
+                    Stepper("\(appState.settings.proofreadMinLength) characters",
+                            value: $appState.settings.proofreadMinLength, in: 1...100)
+                } label: {
+                    helpHeader("Skip fields shorter than", "Short fields are usually search boxes, address bars and login forms: checking them would send their contents to the server for nothing. Anything shorter than this is left alone.")
+                }
             } header: {
-                helpHeader("Proofread", "Shortly after you stop typing, BindAll checks the focused field with LanguageTool and underlines the issues it finds. Click an underlined word to see the fixes: arrows or the mouse choose, Return or a click applies, Tab moves to the next issue, Esc closes the popup. There is no shortcut. Skipped in password fields.\n\nThe whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
+                helpHeader("Proofread", "Shortly after you stop typing, BindAll checks the focused field with LanguageTool and underlines the issues it finds. Click an underlined word to see the fixes: up/down arrows or the mouse choose a fix, Return or a click applies it, Tab and the left/right arrows move to the next problem word, Esc closes the popup. There is no shortcut. Skipped in password fields.\n\nThe whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
             }
 
             LanguageToolConnectionSection()

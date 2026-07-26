@@ -86,8 +86,9 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   pause in typing (~0.6 s) re-checks the focused field and underlines every issue in place
   (squiggles; spelling is purple so it is not mistaken for the red one macOS draws). Clicking an
   underlined word shows its fixes instantly -- the issues are already known, no round trip. In the
-  popup: arrows or mouse hover choose, Return or a click applies, Tab moves to the next issue,
-  Esc closes it (the underlines stay). The number of fixes listed per issue is a setting
+  popup: up/down arrows or mouse hover choose a fix, Return or a click applies it, Tab and the
+  left/right arrows step between problem words (wrapping around), Esc closes it (the underlines
+  stay). Both popups take their text size from Settings → General. The number of fixes listed per issue is a setting
   (1-10, default 3). Underlines follow scrolling and window moves, go down while typing and come
   back with the fresh result, and disappear on an app switch. Apps that expose no word coordinates
   (many Electron/web fields) get no underlines; the popup still works if their text is readable.

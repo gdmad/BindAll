@@ -19,8 +19,8 @@ final class ProofreadController {
 
     struct Config {
         var enabled = false
-        var autoOnClick = true
         var maxReplacements = 3
+        var fontSize: CGFloat = 13
         var minLength = 12
         var restoreClipboard = false
         var appMode = AppFilterMode.all
@@ -106,7 +106,7 @@ final class ProofreadController {
         self.provider = provider
         Task { await provider.configure(engine: engine, language: language) }
 
-        if config.enabled && config.autoOnClick {
+        if config.enabled {
             startClickMonitor()
         } else {
             stopClickMonitor()
@@ -133,7 +133,7 @@ final class ProofreadController {
     /// Mouse-up: show the fixes for the clicked word. When the live pass already checked this text
     /// the popup opens instantly; otherwise the click doubles as a check request.
     private func clickedInText() {
-        guard config.enabled, config.autoOnClick, AccessibilityPermission.isGranted, appAllowed() else { return }
+        guard config.enabled, AccessibilityPermission.isGranted, appAllowed() else { return }
         guard case .axField(let found) = ProofreadAX.focus() else { return }
         guard found.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= config.minLength else { return }
 
@@ -275,6 +275,7 @@ final class ProofreadController {
         popover.show(issue: issue, selected: selectedReplacement,
                      position: "\(currentIndex + 1) of \(issues.count)",
                      anchor: anchor(for: issue),
+                     fontSize: config.fontSize,
                      onHover: { [weak self] index in self?.hoverReplacement(index) },
                      onAccept: { [weak self] index in self?.acceptReplacement(index) })
     }
@@ -301,15 +302,18 @@ final class ProofreadController {
         showCurrent(select: false)
     }
 
-    private func skip() {
-        guard currentIndex + 1 < issues.count else { endNavigation(); return }
-        focusIssue(currentIndex + 1)
+    /// Moves to another issue, wrapping around: with the popup open, Tab and the horizontal arrows
+    /// walk the problem words, while the vertical ones choose among that word's fixes.
+    private func step(_ delta: Int) {
+        guard !issues.isEmpty else { endNavigation(); return }
+        let next = (currentIndex + delta + issues.count) % issues.count
+        focusIssue(next)
     }
 
     private func accept() {
         guard !isApplying else { return } // applying waits for the selection to settle; ignore repeats
         guard let issue = issues[safe: currentIndex],
-              let replacement = issue.replacements[safe: selectedReplacement] else { skip(); return }
+              let replacement = issue.replacements[safe: selectedReplacement] else { step(1); return }
         guard let target else {
             // No AX element: the best we can do is hand them the corrected word.
             TextInjector.copyToPasteboard(replacement)
@@ -395,7 +399,7 @@ final class ProofreadController {
 
     /// A transient notice that closes itself; never leaves the key tap armed.
     private func flash(_ text: String, spinner: Bool = false) {
-        popover.showMessage(text, anchor: currentAnchor(), spinner: spinner)
+        popover.showMessage(text, anchor: currentAnchor(), fontSize: config.fontSize, spinner: spinner)
         setActive(false)
         guard !spinner else { return }
         let gen = generation
@@ -470,11 +474,17 @@ final class ProofreadController {
         case kVK_DownArrow:
             DispatchQueue.main.async { [weak self] in self?.move(1) }
             return nil
+        case kVK_LeftArrow:
+            DispatchQueue.main.async { [weak self] in self?.step(-1) }
+            return nil
+        case kVK_RightArrow:
+            DispatchQueue.main.async { [weak self] in self?.step(1) }
+            return nil
         case kVK_Return, kVK_ANSI_KeypadEnter:
             DispatchQueue.main.async { [weak self] in self?.accept() }
             return nil
         case kVK_Tab:
-            DispatchQueue.main.async { [weak self] in self?.skip() }
+            DispatchQueue.main.async { [weak self] in self?.step(1) }
             return nil
         case kVK_Escape:
             // Closes the popup only: the underlines stay, they are not part of this popup.

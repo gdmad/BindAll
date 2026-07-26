@@ -146,8 +146,8 @@ struct Settings: Codable, Equatable {
     // Suggest a completion for the word being typed, accept with Tab.
     var autocompleteEnabled: Bool = false
     var autocompleteCount: Int = 5            // how many suggestions to show (1...9)
+    var popupFontSize: Int = 13               // text size in both popups: autocomplete and proofread (10...20)
     var autocompleteHorizontal: Bool = false  // false = column (Up/Down), true = line (Left/Right)
-    var autocompleteFontSize: Int = 13        // suggestion text size (10...20)
     var autocompleteLanguages: [String] = []  // dictionary languages (BCP-47); empty = auto-detect
     var autocompleteLearn: Bool = true        // learn accepted/typed words and rank them
     var autocompleteNextWord: Bool = true     // predict the next word after a space
@@ -158,7 +158,6 @@ struct Settings: Codable, Equatable {
     // Proofread behaviour. Whether it runs at all, its shortcut, the server and the language come
     // from the Correct settings below: it is the same action, reworked to step through the issues
     // instead of applying them all blindly.
-    var proofreadAutoOnClick: Bool = true      // show the popup when clicking inside a problem word
     var proofreadMaxReplacements: Int = 3      // fixes listed per issue (1...10)
     var proofreadMinLength: Int = 12           // shortest text worth checking
     var proofreadAppMode: String = "all"       // "all" | "allow" | "deny"
@@ -223,9 +222,9 @@ extension Settings {
     enum CodingKeys: String, CodingKey {
         case enabled, defaultEngine, separator, defaultPrompt, actionKeys,
              restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteHorizontal,
-             autocompleteFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
+             popupFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
              autocompleteAcceptReturn, autocompleteAppMode, autocompleteApps,
-             proofreadAutoOnClick, proofreadMaxReplacements,
+             proofreadMaxReplacements,
              proofreadMinLength, proofreadAppMode, proofreadApps,
              historyEnabled, sourceLanguage, targetLanguage,
              correctEnabled, languageToolMode, languageToolBaseURL, languageToolUsername, languageToolLanguage,
@@ -235,7 +234,7 @@ extension Settings {
 
     /// Old key names still honoured on decode (never written back).
     private enum LegacyKeys: String, CodingKey {
-        case proofreadAutoOnSelection
+        case autocompleteFontSize
     }
 
     init(from decoder: Decoder) throws {
@@ -251,20 +250,19 @@ extension Settings {
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteEnabled) { autocompleteEnabled = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteCount) { autocompleteCount = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteHorizontal) { autocompleteHorizontal = v }
-        if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteFontSize) { autocompleteFontSize = v }
+        // autocompleteFontSize is the legacy name of popupFontSize (it now drives both popups).
+        if let v = try c.decodeIfPresent(Int.self, forKey: .popupFontSize) {
+            popupFontSize = v
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
+                  let v = try legacy.decodeIfPresent(Int.self, forKey: .autocompleteFontSize) {
+            popupFontSize = v
+        }
         if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteLanguages) { autocompleteLanguages = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteLearn) { autocompleteLearn = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteNextWord) { autocompleteNextWord = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteAcceptReturn) { autocompleteAcceptReturn = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .autocompleteAppMode) { autocompleteAppMode = v }
         if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteApps) { autocompleteApps = v }
-        // proofreadAutoOnSelection is the legacy name of proofreadAutoOnClick; the new key wins.
-        if let v = try c.decodeIfPresent(Bool.self, forKey: .proofreadAutoOnClick) {
-            proofreadAutoOnClick = v
-        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
-                  let v = try legacy.decodeIfPresent(Bool.self, forKey: .proofreadAutoOnSelection) {
-            proofreadAutoOnClick = v
-        }
         if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMaxReplacements) { proofreadMaxReplacements = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMaxReplacements) { proofreadMaxReplacements = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMinLength) { proofreadMinLength = v }

@@ -29,11 +29,17 @@ final class UnderlineOverlay {
         // for a field frame the app refuses to report (Chromium answers one but not always both).
         var wordRects: [(screen: CGRect, color: NSColor)] = []
         for issue in issues {
-            guard let quartz = ProofreadAX.boundsForRange(issue.range, in: element) else { continue }
+            // Our offsets come from the field's value; some apps (Chromium, Obsidian) index their
+            // geometry differently, so translate the range into the app's own before measuring --
+            // an underline in the wrong place is worse than no underline.
+            guard let range = ProofreadAX.alignedRange(issue.range, expecting: issue.original, in: element,
+                                                       contextBefore: issue.contextBefore,
+                                                       contextAfter: issue.contextAfter),
+                  let quartz = ProofreadAX.boundsForRange(range, in: element,
+                                                          expecting: issue.original) else { continue }
             // The one-character probe tells a wrapped range from a single-line one. When the app
             // does not answer it, fall back to a plausible single-line height.
-            let probe = ProofreadAX.boundsForRange(NSRange(location: issue.range.location, length: 1),
-                                                   in: element)
+            let probe = ProofreadAX.boundsForRange(NSRange(location: range.location, length: 1), in: element)
             if let probe {
                 guard UnderlineGeometry.isSingleLine(rangeRect: quartz, probeRect: probe) else { continue }
             } else {

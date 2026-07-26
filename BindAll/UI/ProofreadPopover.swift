@@ -12,7 +12,7 @@ final class ProofreadPopover {
 
     /// Shows `issue`'s fixes with `selected` highlighted, placed above `anchor` -- the word's rect in
     /// AppKit screen coordinates. `onHover`/`onAccept` receive the row index the mouse is on.
-    func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect,
+    func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, fontSize: CGFloat,
               onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
                                original: issue.original,
@@ -20,14 +20,15 @@ final class ProofreadPopover {
                                replacements: issue.replacements,
                                selected: selected,
                                position: position,
+                               fontSize: fontSize,
                                onHover: onHover,
                                onAccept: onAccept)
         present(AnyView(view), above: anchor)
     }
 
     /// A one-line notice (checking, no issues, server error) in the same place as the list.
-    func showMessage(_ text: String, anchor: CGRect, spinner: Bool = false) {
-        present(AnyView(MessageView(text: text, spinner: spinner)), above: anchor)
+    func showMessage(_ text: String, anchor: CGRect, fontSize: CGFloat, spinner: Bool = false) {
+        present(AnyView(MessageView(text: text, fontSize: fontSize, spinner: spinner)), above: anchor)
     }
 
     func hide() {
@@ -100,6 +101,8 @@ private struct PopoverView: View {
     let selected: Int
     /// e.g. "2 of 7"
     let position: String
+    /// Base size for the fix rows; the header and hints sit a couple of points below it.
+    let fontSize: CGFloat
     let onHover: (Int) -> Void
     let onAccept: (Int) -> Void
 
@@ -108,20 +111,20 @@ private struct PopoverView: View {
             HStack(spacing: 5) {
                 Circle().fill(color).frame(width: 6, height: 6)
                 Text(title)
-                    .font(.system(size: 11))
+                    .font(.system(size: fontSize - 2))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Spacer(minLength: 8)
                 Text(position)
-                    .font(.system(size: 10))
+                    .font(.system(size: fontSize - 3))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 5)
             .padding(.top, 3)
 
             if replacements.isEmpty {
-                Text("No suggestions - Tab to skip")
-                    .font(.system(size: 12))
+                Text("No suggestions - Tab or arrows for the next word")
+                    .font(.system(size: fontSize - 1))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 5)
                     .padding(.bottom, 3)
@@ -148,13 +151,13 @@ private struct PopoverView: View {
     private func row(_ word: String, isSelected: Bool) -> some View {
         HStack(spacing: 6) {
             Text(word)
-                .font(.system(size: 13))
+                .font(.system(size: fontSize))
                 .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
                 .lineLimit(1)
             Spacer(minLength: 4)
             if isSelected {
                 Text("Return")
-                    .font(.system(size: 10))
+                    .font(.system(size: fontSize - 3))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -177,13 +180,14 @@ private struct PopoverView: View {
 
 private struct MessageView: View {
     let text: String
+    let fontSize: CGFloat
     let spinner: Bool
 
     var body: some View {
         HStack(spacing: 6) {
             if spinner { ProgressView().controlSize(.small).scaleEffect(0.6) }
             Text(text)
-                .font(.system(size: 12))
+                .font(.system(size: fontSize - 1))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         }

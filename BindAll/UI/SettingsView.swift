@@ -80,7 +80,7 @@ struct GeneralSettingsView: View {
 
             Section {
                 Toggle(isOn: $appState.settings.correctEnabled) {
-                    helpHeader("Enable Proofread", "Checks the text field you are typing in with a LanguageTool server shortly after you pause, and underlines every issue in place. Click an underlined word to see the fixes (arrows or the mouse choose, Return or a click applies, Tab moves to the next issue, Esc closes). Configure it all on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
+                    helpHeader("Enable Proofread", "Checks the text field you are typing in with a LanguageTool server shortly after you pause, and underlines every issue in place. Click an underlined word to see the fixes (up/down choose a fix, Return applies it, Tab or left/right move to the next problem word, Esc closes). Configure it all on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
                 }
             } header: {
                 Text("Proofread (LanguageTool)")
@@ -101,6 +101,12 @@ struct GeneralSettingsView: View {
                 }
                 Toggle(isOn: $appState.settings.maskAISlop) {
                     helpHeader("Mask AI Slop", "Normalizes typical 'AI' typography in results: em/en dashes become '-', smart quotes and apostrophes become straight ones, and emoji and unusual unicode are stripped.")
+                }
+                LabeledContent {
+                    Stepper("\(appState.settings.popupFontSize) pt",
+                            value: $appState.settings.popupFontSize, in: 10...20)
+                } label: {
+                    helpHeader("Popup text size", "Text size in the floating popups: the autocomplete suggestions and the proofread fixes.")
                 }
                 Toggle(isOn: $appState.settings.historyEnabled) {
                     helpHeader("Keep history", "Stores the last 50 results locally (menu bar > History) so a closed popup or overwritten paste can be recovered. Stored on this Mac only; never includes API keys.")

@@ -17,8 +17,6 @@ struct AutocompleteSettingsView: View {
                     Text("Column").tag(false)
                     Text("Line").tag(true)
                 }
-                Stepper("Text size: \(appState.settings.autocompleteFontSize)",
-                        value: $appState.settings.autocompleteFontSize, in: 10...20)
                 LabeledContent("Languages") {
                     Menu(languagesLabel) {
                         Toggle("Auto-detect", isOn: autoBinding)

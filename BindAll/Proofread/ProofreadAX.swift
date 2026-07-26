@@ -251,9 +251,10 @@ enum ProofreadAX {
 
     /// Screen bounds of `range` (Quartz, top-left origin); nil when neither the element nor its leaf
     /// text descendants answer (many Electron and web fields keep the geometry on the leaves).
-    static func boundsForRange(_ range: NSRange, in element: AXUIElement) -> CGRect? {
+    static func boundsForRange(_ range: NSRange, in element: AXUIElement,
+                               expecting expected: String? = nil) -> CGRect? {
         if let rect = rawBounds(range, in: element) { return rect }
-        return boundsFromLeaves(range, in: element)
+        return boundsFromLeaves(range, in: element, expecting: expected)
     }
 
     /// One `AXBoundsForRange` question, with the answer sanity-checked.
@@ -272,15 +273,31 @@ enum ProofreadAX {
     }
 
     /// Walks the leaf text descendants, mapping the field-wide `range` onto the leaf that holds it.
-    static func boundsFromLeaves(_ range: NSRange, in element: AXUIElement) -> CGRect? {
+    static func boundsFromLeaves(_ range: NSRange, in element: AXUIElement,
+                                 expecting expected: String? = nil) -> CGRect? {
         var offset = 0
         for leaf in textLeaves(of: element) {
-            let length = (leaf.text as NSString).length
+            let ns = leaf.text as NSString
+            let length = ns.length
             defer { offset += length }
             guard range.location >= offset, range.location < offset + length else { continue }
             let local = NSRange(location: range.location - offset,
                                 length: min(range.length, length - (range.location - offset)))
+            // The leaves need not be laid out the way the field's value is (Obsidian splits by
+            // formatting), so trust the offset only when the leaf's own text agrees.
+            if let expected, ns.substring(with: local) != expected {
+                let found = ns.range(of: expected, options: [.literal])
+                guard found.location != NSNotFound, let rect = rawBounds(found, in: leaf.element) else { continue }
+                return rect
+            }
             if let rect = rawBounds(local, in: leaf.element) { return rect }
+        }
+        // Offsets did not line up with any leaf: look for the text itself, nearest leaf first.
+        guard let expected else { return nil }
+        for leaf in textLeaves(of: element) {
+            let found = (leaf.text as NSString).range(of: expected, options: [.literal])
+            guard found.location != NSNotFound, let rect = rawBounds(found, in: leaf.element) else { continue }
+            return rect
         }
         return nil
     }
