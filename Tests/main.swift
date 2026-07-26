@@ -338,6 +338,17 @@ check(!UnderlineGeometry.isSingleLine(rangeRect: CGRect(x: 0, y: 0, width: 100, 
                                       probeRect: .zero),
       "a zero probe rect is rejected")
 
+print("ProofreadSupport")
+check(!ProofreadSupport.verified.isEmpty, "the tested-apps table is not empty")
+check(ProofreadSupport.verified.allSatisfy { !$0.bundleID.isEmpty && !$0.name.isEmpty },
+      "every entry has a bundle id and a name")
+check(Set(ProofreadSupport.verified.map(\.bundleID)).count == ProofreadSupport.verified.count,
+      "bundle ids are unique")
+check(ProofreadSupport.entry(for: "com.apple.TextEdit")?.name == "TextEdit",
+      "lookup finds a listed app")
+check(ProofreadSupport.entry(for: "com.example.unknown") == nil,
+      "lookup returns nothing for an app that was never tested")
+
 print("TextSegmenter.paragraphs")
 func tiles(_ ps: [Paragraph], _ text: String) -> Bool {
     var next = 0

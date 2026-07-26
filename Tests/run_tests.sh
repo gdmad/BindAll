@@ -14,6 +14,7 @@ swiftc -O \
     BindAll/Proofread/TextIssue.swift \
     BindAll/Proofread/WordBoundary.swift \
     BindAll/Proofread/UnderlineGeometry.swift \
+    BindAll/Proofread/ProofreadSupport.swift \
     BindAll/Proofread/IssueMerger.swift \
     BindAll/Proofread/ProofreadCache.swift \
     BindAll/Proofread/ProofreadLanguage.swift \

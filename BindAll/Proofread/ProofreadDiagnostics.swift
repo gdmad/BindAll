@@ -20,6 +20,11 @@ enum ProofreadDiagnostics {
         if let app = NSWorkspace.shared.frontmostApplication {
             lines.append("Frontmost app: \(app.localizedName ?? "?") (\(app.bundleIdentifier ?? "no bundle id"), pid \(app.processIdentifier))")
             lines.append("Chromium/Electron: \(ProofreadAX.isChromium(pid: app.processIdentifier))")
+            switch ProofreadSupport.entry(for: app.bundleIdentifier ?? "")?.level {
+            case .full: lines.append("Known support: verified - underlines and fixes")
+            case .fixesOnly: lines.append("Known support: verified - fixes only (no word coordinates)")
+            case nil: lines.append("Known support: not on the tested list")
+            }
             if app.bundleIdentifier == Bundle.main.bundleIdentifier {
                 lines.append("NOTE: focus was on BindAll itself - click into another app's text field and run this again.")
             }
