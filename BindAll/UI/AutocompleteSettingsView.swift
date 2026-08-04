@@ -13,9 +13,10 @@ struct AutocompleteSettingsView: View {
             Section {
                 Stepper("Suggestions shown: \(appState.settings.autocompleteCount)",
                         value: $appState.settings.autocompleteCount, in: 1...9)
-                Picker("Layout", selection: deferredWrite($appState.settings.autocompleteHorizontal)) {
-                    Text("Column").tag(false)
-                    Text("Line").tag(true)
+                Picker("Layout", selection: deferredWrite($appState.settings.autocompleteLayout)) {
+                    ForEach(PopupLayout.allCases, id: \.self) { layout in
+                        Text(layout.displayName).tag(layout)
+                    }
                 }
                 LabeledContent("Languages") {
                     Menu(languagesLabel) {

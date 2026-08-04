@@ -11,6 +11,11 @@ struct ProofreadSettingsView: View {
             Section {
                 Stepper("Fixes shown per issue: \(appState.settings.proofreadMaxReplacements)",
                         value: $appState.settings.proofreadMaxReplacements, in: 1...10)
+                Picker("Fix list layout", selection: deferredWrite($appState.settings.proofreadLayout)) {
+                    ForEach(PopupLayout.allCases, id: \.self) { layout in
+                        Text(layout.displayName).tag(layout)
+                    }
+                }
                 LabeledContent {
                     Stepper("\(appState.settings.proofreadMinLength) characters",
                             value: $appState.settings.proofreadMinLength, in: 1...100)
@@ -18,7 +23,7 @@ struct ProofreadSettingsView: View {
                     helpHeader("Skip fields shorter than", "Short fields are usually search boxes, address bars and login forms: checking them would send their contents to the server for nothing. Anything shorter than this is left alone.")
                 }
             } header: {
-                helpHeader("Proofread", "Shortly after you stop typing, BindAll checks the focused field with LanguageTool and underlines the issues it finds. Click an underlined word to see the fixes: up/down arrows or the mouse choose a fix, Return or a click applies it, Tab and the left/right arrows move to the next problem word, Esc closes the popup. There is no shortcut. Skipped in password fields.\n\nThe whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
+                helpHeader("Proofread", "Shortly after you stop typing, BindAll checks the focused field with LanguageTool and underlines the issues it finds. Click an underlined word to see the fixes: arrows or the mouse choose a fix, digits 1-9 pick the numbered one, Return or a click applies it, Tab moves to the next problem word, Esc closes the popup. There is no shortcut. Skipped in password fields.\n\nThe whole field is sent one paragraph at a time, so LanguageTool sees enough context to catch grammar; unchanged paragraphs are cached and not sent again.")
             }
 
             LanguageToolConnectionSection()

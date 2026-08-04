@@ -71,7 +71,7 @@ final class HotkeyCoordinator: ObservableObject {
         let s = appState.settings
         var cfg = AutocompleteController.Config()
         cfg.maxSuggestions = s.autocompleteCount
-        cfg.horizontal = s.autocompleteHorizontal
+        cfg.layout = s.autocompleteLayout
         cfg.fontSize = CGFloat(max(10, min(20, s.popupFontSize)))
         cfg.languages = s.autocompleteLanguages
         cfg.learn = s.autocompleteLearn
@@ -94,6 +94,7 @@ final class HotkeyCoordinator: ObservableObject {
         var cfg = ProofreadController.Config()
         cfg.enabled = s.correctEnabled
         cfg.maxReplacements = s.proofreadMaxReplacements
+        cfg.layout = s.proofreadLayout
         cfg.fontSize = CGFloat(max(10, min(20, s.popupFontSize)))
         cfg.minLength = s.proofreadMinLength
         cfg.restoreClipboard = s.restoreClipboard

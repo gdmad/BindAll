@@ -46,7 +46,7 @@ final class AutocompleteController {
     private struct Suppression {
         var hasSuggestion = false
         var selectedIndex = 0
-        var horizontal = false
+        var layout = PopupLayout.column
         var acceptReturn = true
     }
     private var suppression = Suppression()
@@ -69,7 +69,7 @@ final class AutocompleteController {
     enum AppFilterMode: String { case all, allow, deny }
     struct Config {
         var maxSuggestions = 5
-        var horizontal = false
+        var layout = PopupLayout.column
         var fontSize: CGFloat = 13
         var languages: [String] = []
         var learn = true
@@ -249,8 +249,6 @@ final class AutocompleteController {
 
         // Consume the keys that drive the popup — only as bare keys (any modifier, including Shift,
         // passes through, so e.g. Shift+Return still makes a newline).
-        let prevKey = snap.horizontal ? kVK_LeftArrow : kVK_UpArrow
-        let nextKey = snap.horizontal ? kVK_RightArrow : kVK_DownArrow
         let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
         if keyCode == kVK_Tab || (isReturn && snap.acceptReturn) {
             let index = snap.selectedIndex
@@ -263,12 +261,8 @@ final class AutocompleteController {
             DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
             return nil
         }
-        if keyCode == prevKey {
-            DispatchQueue.main.async { [weak self] in self?.move(-1) }
-            return nil
-        }
-        if keyCode == nextKey {
-            DispatchQueue.main.async { [weak self] in self?.move(1) }
+        if let delta = Self.navDelta(for: keyCode, layout: snap.layout) {
+            DispatchQueue.main.async { [weak self] in self?.move(dx: delta.dx, dy: delta.dy) }
             return nil
         }
         // Any other key isn't part of the nav set: close the popup now (it touches UI, so on main)
@@ -279,6 +273,33 @@ final class AutocompleteController {
         invalidateSuppression()
         DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
         return Unmanaged.passUnretained(event)
+    }
+
+    /// Which arrow keys drive the suggestion selection for a layout, and in which direction. A key a
+    /// layout does not navigate with returns nil and falls through to the "user moved on" close path.
+    private static func navDelta(for keyCode: Int, layout: PopupLayout) -> (dx: Int, dy: Int)? {
+        switch layout {
+        case .column:
+            switch keyCode {
+            case kVK_UpArrow: return (0, -1)
+            case kVK_DownArrow: return (0, 1)
+            default: return nil
+            }
+        case .line:
+            switch keyCode {
+            case kVK_LeftArrow: return (-1, 0)
+            case kVK_RightArrow: return (1, 0)
+            default: return nil
+            }
+        case .tile:
+            switch keyCode {
+            case kVK_UpArrow: return (0, -1)
+            case kVK_DownArrow: return (0, 1)
+            case kVK_LeftArrow: return (-1, 0)
+            case kVK_RightArrow: return (1, 0)
+            default: return nil
+            }
+        }
     }
 
     /// Tap-thread side: marks the suggestion dead immediately, so a key arriving before main has
@@ -303,7 +324,7 @@ final class AutocompleteController {
     private func syncSuppression() {
         let hasSuggestion = !candidates.isEmpty
         let snap = Suppression(hasSuggestion: hasSuggestion, selectedIndex: selectedIndex,
-                               horizontal: config.horizontal, acceptReturn: config.acceptReturn)
+                               layout: config.layout, acceptReturn: config.acceptReturn)
         os_unfair_lock_lock(&suppressionLock)
         suppression = snap
         os_unfair_lock_unlock(&suppressionLock)
@@ -433,7 +454,7 @@ final class AutocompleteController {
                 me.candidates = list
                 me.selectedIndex = 0
                 me.lastAnchor = resolvedAnchor
-                me.overlay.show(list, selected: 0, horizontal: cfg.horizontal, fontSize: cfg.fontSize,
+                me.overlay.show(list, selected: 0, layout: cfg.layout, fontSize: cfg.fontSize,
                                 topLeft: resolvedAnchor)
                 me.syncSuppression()
             }
@@ -462,7 +483,7 @@ final class AutocompleteController {
                 me.candidates = words
                 me.selectedIndex = 0
                 me.lastAnchor = anchor
-                me.overlay.show(words, selected: 0, horizontal: cfg.horizontal, fontSize: cfg.fontSize,
+                me.overlay.show(words, selected: 0, layout: cfg.layout, fontSize: cfg.fontSize,
                                 topLeft: anchor)
                 me.syncSuppression()
             }
@@ -478,10 +499,20 @@ final class AutocompleteController {
         }
     }
 
-    private func move(_ delta: Int) {
+    /// Moves the selection by `dx`/`dy` in the layout's coordinate system: vertical in a column,
+    /// horizontal in a line, both axes in the two-row tile.
+    private func move(dx: Int, dy: Int) {
         guard !candidates.isEmpty else { return }
-        selectedIndex = max(0, min(candidates.count - 1, selectedIndex + delta))
-        overlay.show(candidates, selected: selectedIndex, horizontal: config.horizontal,
+        let count = candidates.count
+        let next: Int
+        switch config.layout {
+        case .column: next = max(0, min(count - 1, selectedIndex + dy))
+        case .line: next = max(0, min(count - 1, selectedIndex + dx))
+        case .tile: next = PopupLayout.tileIndex(from: selectedIndex, deltaX: dx, deltaY: dy, count: count)
+        }
+        guard next != selectedIndex else { return }
+        selectedIndex = next
+        overlay.show(candidates, selected: selectedIndex, layout: config.layout,
                      fontSize: config.fontSize, topLeft: lastAnchor)
         syncSuppression()
     }
