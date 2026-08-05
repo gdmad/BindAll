@@ -18,6 +18,41 @@ enum AutocompleteEngine {
         return ns.substring(with: NSRange(location: start, length: caret - start))
     }
 
+    /// The up to `count` completed words immediately before the word being typed at
+    /// `caretUTF16Offset`, lowercased, most recent first (`[0]` = the word just before the caret).
+    /// Non-letter characters split tokens, so the words are the same units the learning store sees.
+    /// Empty when there is no completed word before the caret.
+    static func precedingWords(in text: String, caretUTF16Offset: Int, count: Int) -> [String] {
+        let ns = text as NSString
+        let caret = max(0, min(caretUTF16Offset, ns.length))
+        var tokens: [String] = []
+        var i = caret
+        // Skip the partial word currently being typed.
+        while i > 0 {
+            guard let scalar = Unicode.Scalar(ns.character(at: i - 1)),
+                  CharacterSet.letters.contains(scalar) else { break }
+            i -= 1
+        }
+        // Walk further back, collecting completed letter words.
+        while i > 0, tokens.count < count {
+            while i > 0 {
+                guard let scalar = Unicode.Scalar(ns.character(at: i - 1)),
+                      !CharacterSet.letters.contains(scalar) else { break }
+                i -= 1
+            }
+            let end = i
+            while i > 0 {
+                guard let scalar = Unicode.Scalar(ns.character(at: i - 1)),
+                      CharacterSet.letters.contains(scalar) else { break }
+                i -= 1
+            }
+            if i < end {
+                tokens.append(ns.substring(with: NSRange(location: i, length: end - i)).lowercased())
+            }
+        }
+        return tokens
+    }
+
     private static let wordTerminators: Set<Character> = [".", ",", "!", "?", ";", ":",
                                                           ")", "]", "}", "\"", "»", "”", "…"]
 
@@ -28,17 +63,58 @@ enum AutocompleteEngine {
         wordTerminators.contains(character)
     }
 
-    /// Up to `limit` suggestions for `partial`: learned words first (already frequency-ordered), then
-    /// dictionary completions that extend it, then spelling guesses. `language` is "auto" or a BCP-47
-    /// code. Each result is recased to the typed word's case pattern. Main-thread only (NSSpellChecker).
-    /// `languages`: BCP-47 codes to query; empty means auto-detect a single language.
+    /// Which candidate pool and ranking a `Request` uses. `baseline` reproduces the original
+    /// behavior exactly; the other modes gather the same learned + dictionary candidates and re-rank
+    /// them with a scorer supplied by the caller (so this file stays free of the learning store and
+    /// the embedding framework).
+    enum Mode: String, CaseIterable {
+        /// Original behavior: learned completions first (frequency order), then dictionary
+        /// completions, then spelling guesses. Context is not consulted.
+        case baseline
+        /// Variant A/B: gather learned + dictionary completions into a larger pool, then rank it with
+        /// `contextScorer` (previous-word n-gram evidence + frequency prior). Guesses are not used.
+        case context
+        /// Variant C: same pool, ranked with `semanticScorer` (context-embedding similarity blended
+        /// with the frequency prior). Guesses are not used.
+        case semantic
+    }
+
+    /// One evaluation of the completion engine. `learned` is the caller's frequency-ordered list of
+    /// learned words extending `partial`. The scorer closures are optional: a nil scorer degrades the
+    /// re-ranking modes to the pool's natural order (frequency, then dictionary).
+    struct Request {
+        var partial: String
+        var languages: [String]   // BCP-47 codes to query; empty means auto-detect a single language
+        var learned: [String]
+        var limit: Int
+        var mode: Mode = .baseline
+        /// Higher is better; nil means no context information (falls back to the pool order).
+        var contextScorer: ((String) -> Double)? = nil
+        /// Higher is better; nil means semantic ranking is unavailable (falls back to the pool order).
+        var semanticScorer: ((String) -> Double)? = nil
+    }
+
+    /// How many candidates are gathered before a re-ranking mode scores them. Large enough that the
+    /// context/semantic ranking has real choices, small enough that NSSpellChecker never floods the
+    /// pipeline (it can return hundreds of entries for short prefixes). Internal so the controller
+    /// can size its learned-candidate request to match.
+    static let reRankPoolLimit = 30
+
+    /// Baseline convenience: original `suggestions(for:languages:learned:limit:)` behavior.
     static func suggestions(for partial: String, languages: [String], learned: [String], limit: Int) -> [String] {
-        guard !partial.isEmpty else { return [] }
-        let lower = partial.lowercased()
+        suggestions(request: Request(partial: partial, languages: languages, learned: learned, limit: limit))
+    }
+
+    /// Up to `request.limit` suggestions for the partial word, per `request.mode`. Each result is
+    /// recased to the typed word's case pattern. Main-thread only (NSSpellChecker).
+    static func suggestions(request: Request) -> [String] {
+        guard !request.partial.isEmpty else { return [] }
+        let lower = request.partial.lowercased()
+        let limit = max(0, request.limit)
         var out: [String] = []
 
         func addExtending(_ word: String) {
-            guard word.count > partial.count, word.lowercased().hasPrefix(lower),
+            guard word.count > request.partial.count, word.lowercased().hasPrefix(lower),
                   !out.contains(where: { $0.lowercased() == word.lowercased() }) else { return }
             out.append(word)
         }
@@ -47,47 +123,78 @@ enum AutocompleteEngine {
                   !out.contains(where: { $0.lowercased() == word.lowercased() }) else { return }
             out.append(word)
         }
-
-        for word in learned {
-            addExtending(word)
-            if out.count >= limit { break }
-        }
-
-        if out.count < limit {
+        func fillFromSpellChecker(stopAt: Int, includeGuesses: Bool) {
             let checker = NSSpellChecker.shared
             let langs: [String]
-            if languages.isEmpty {
+            if request.languages.isEmpty {
                 checker.automaticallyIdentifiesLanguages = true
                 langs = [checker.language()]
             } else {
-                langs = languages
+                langs = request.languages
             }
-            let range = NSRange(location: 0, length: (partial as NSString).length)
+            let range = NSRange(location: 0, length: (request.partial as NSString).length)
             // Completions first (across all chosen languages), then guesses.
             for lang in langs {
-                for candidate in (checker.completions(forPartialWordRange: range, in: partial,
+                for candidate in (checker.completions(forPartialWordRange: range, in: request.partial,
                                                       language: lang, inSpellDocumentWithTag: 0) ?? []) {
                     addExtending(candidate)
-                    if out.count >= limit { break }
+                    if out.count >= stopAt { break }
                 }
+                if out.count >= stopAt { break }
+            }
+            if includeGuesses && out.count < stopAt {
+                for lang in langs {
+                    for guess in (checker.guesses(forWordRange: range, in: request.partial,
+                                                  language: lang, inSpellDocumentWithTag: 0) ?? []) {
+                        addCorrection(guess)
+                        if out.count >= stopAt { break }
+                    }
+                    if out.count >= stopAt { break }
+                }
+            }
+        }
+
+        switch request.mode {
+        case .baseline:
+            // Original pipeline, preserved exactly: learned first, dictionary, then guesses.
+            for word in request.learned {
+                addExtending(word)
                 if out.count >= limit { break }
             }
             if out.count < limit {
-                for lang in langs {
-                    for guess in (checker.guesses(forWordRange: range, in: partial,
-                                                  language: lang, inSpellDocumentWithTag: 0) ?? []) {
-                        addCorrection(guess)
-                        if out.count >= limit { break }
-                    }
-                    if out.count >= limit { break }
-                }
+                fillFromSpellChecker(stopAt: limit, includeGuesses: true)
             }
+
+        case .context, .semantic:
+            // Gather a pool larger than the visible limit so the re-ranking has real choices.
+            let poolLimit = max(reRankPoolLimit, limit)
+            for word in request.learned {
+                addExtending(word)
+                if out.count >= poolLimit { break }
+            }
+            if out.count < poolLimit {
+                fillFromSpellChecker(stopAt: poolLimit, includeGuesses: false)
+            }
+            let scorer: (String) -> Double
+            switch request.mode {
+            case .context: scorer = { request.contextScorer?($0) ?? 0 }
+            case .semantic: scorer = { request.semanticScorer?($0) ?? 0 }
+            case .baseline: fatalError("unreachable")
+            }
+            // Stable sort by score descending: ties keep the pool order (frequency, then dictionary).
+            let ranked = out.enumerated()
+                .sorted { a, b in
+                    let sa = scorer(a.element), sb = scorer(b.element)
+                    return sa != sb ? sa > sb : a.offset < b.offset
+                }
+                .map { $0.element }
+            out = ranked
         }
 
         // Recase to the typed word's case pattern, de-duplicating again.
         var result: [String] = []
         for word in out {
-            let cased = recased(word, like: partial)
+            let cased = recased(word, like: request.partial)
             if !result.contains(cased) { result.append(cased) }
         }
         return Array(result.prefix(limit))

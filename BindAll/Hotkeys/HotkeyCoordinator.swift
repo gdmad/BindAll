@@ -77,6 +77,7 @@ final class HotkeyCoordinator: ObservableObject {
         cfg.learn = s.autocompleteLearn
         cfg.nextWord = s.autocompleteNextWord
         cfg.acceptReturn = s.autocompleteAcceptReturn
+        cfg.contextRanking = s.autocompleteContextRanking
         cfg.appMode = AutocompleteController.AppFilterMode(rawValue: s.autocompleteAppMode) ?? .all
         cfg.apps = Set(s.autocompleteApps)
         autocomplete.configure(cfg)

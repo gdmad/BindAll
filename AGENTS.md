@@ -36,10 +36,13 @@ BindAll/
 │   ├── TranslationService.swift      # Apple Translation framework + NL language detection
 │   └── OCRService.swift        # screencapture region + Vision text recognition
 ├── Autocomplete/               # word completion while typing (off by default)
-│   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word
+│   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word; Mode (baseline/context/semantic) + scorer re-ranking
 │   ├── AutocompleteController.swift   # two CGEventTaps on own thread (listen-only monitor + active suppressor); AX/keystroke word; suggestions, next-word, accept
-│   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed (thread-safe)
-│   ├── ru_bigrams.txt                 # bundled Russian bigram seed (Google Books, CC BY 3.0)
+│   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed; contextScore() ranks completions by preceding words (thread-safe)
+│   ├── SemanticRanker.swift           # experimental: NLContextualEmbedding (Cyrillic) cosine re-ranking, debug-only
+│   ├── ru_bigrams.txt                 # RU bigram seed for next-word only (Google Books, CC BY 3.0) -- frozen
+│   ├── ru_bigrams_ctx.txt             # RU context bigram seed (Leipzig news, CC BY 4.0) for completion ranking
+│   ├── ru_trigrams.txt                # RU context trigram seed (Leipzig news, CC BY 4.0) for completion ranking
 │   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
 ├── Proofread/                  # step through LanguageTool's findings one at a time
 │   ├── TextIssue.swift                # shared issue model (UTF-16 ranges, stable ids)
@@ -76,7 +79,12 @@ docs/
 └── proofread-app-testing.md    # the per-app pass to run before adding to ProofreadSupport
 Tests/
 ├── main.swift                  # PromptParser + MaskAISlop assertions (no XCTest host needed)
-└── run_tests.sh
+├── run_tests.sh
+├── eval_autocomplete.sh        # autocomplete ranking evaluator (hit@1/hit@3/MRR per prefix)
+├── eval_autocomplete.swift     # harness: RU corpus, cold/warm store, baseline|context|semantic modes
+├── gen_ru_ngrams.py            # rebuilds ru_bigrams_ctx.txt / ru_trigrams.txt from a sentence corpus
+├── ru_eval_corpus.txt          # 105 RU sentences (80 hand-written + 25 Leipzig news) used by the evaluator
+└── eval_results.md             # experiment results: baseline vs variants A/B/C, winner = context ranking
 Info.plist                      # LSUIElement, version (source of truth for version)
 ```
 
@@ -110,12 +118,21 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Word autocomplete** (off by default; enable on General, configure on the Autocomplete
   tab): as you type, a list of case-matched completions appears near the caret; arrow keys choose,
   **Tab** (and optionally Return) inserts; any other key, a click anywhere, or leaving the app
-  dismisses it. It can predict the next word after a space and learn the words you use (local
+  dismisses it. Completions are **ranked by the preceding words** (the "Rank by context" setting,
+  default on): `AutocompleteLearningStore.contextScore` interpolates learned trigram > learned
+  bigram > bundled RU trigram/bigram seeds > personal frequency, and the pool (learned + dictionary
+  completions, up to 30) is re-ranked by that score -- this was validated by an experiment
+  (`Tests/eval_autocomplete.sh`, results in `Tests/eval_results.md`; next-word prediction is
+  deliberately frozen and does not use the context seeds). It can predict the next word after a
+  space and learn the words you use (local
   `AutocompleteLearningStore`): a word is learned when a space or punctuation closes it, and when a
   suggestion is accepted. Return deliberately does not learn (it submits password fields).
   Configurable: count, column/line/tile layout, text
   size, dictionary language, and per-app allow/deny. Uses AX text+caret where available, otherwise a
   keystroke buffer (works in most apps). Skipped in password fields and BindAll's own windows.
+  The ranking mode can be overridden for experiments with
+  `defaults write com.evgeny.bindall AutocompleteVariant -string baseline|context|semantic`
+  (semantic re-ranking via `SemanticRanker` measured poorly on Russian and stays off by default).
   Its tap is an active tap (it consumes Tab/arrows while suggesting), so it runs on a **dedicated
   run-loop thread** and the callback only makes a cheap lock-protected suppression decision; all AX
   and NSSpellChecker work happens on a background queue. Do not move the tap back to the main run

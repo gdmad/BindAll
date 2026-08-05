@@ -40,6 +40,9 @@ struct AutocompleteSettingsView: View {
                 Toggle(isOn: $appState.settings.autocompleteLearn) {
                     helpHeader("Learn from what you type", "Remembers the words you use (and which follow which) to rank suggestions and power next-word prediction. Stored locally; words only.")
                 }
+                Toggle(isOn: $appState.settings.autocompleteContextRanking) {
+                    helpHeader("Rank by context", "Ranks completions using the words before the caret (bundled Russian n-gram data plus what you have typed before), instead of a fixed order.")
+                }
                 LabeledContent("Learned words") {
                     HStack {
                         Text("\(learnedCount)").foregroundStyle(.secondary)

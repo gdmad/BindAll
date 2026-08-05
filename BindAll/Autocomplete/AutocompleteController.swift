@@ -75,6 +75,7 @@ final class AutocompleteController {
         var learn = true
         var nextWord = true
         var acceptReturn = true
+        var contextRanking = true   // rank completions by the preceding words (the winning variant)
         var appMode = AppFilterMode.all
         var apps: Set<String> = []
     }
@@ -94,6 +95,41 @@ final class AutocompleteController {
     private var suspended = false
 
     var isRunning: Bool { running }
+
+    // MARK: - Experiment switch
+
+    /// Debug/experiment key in UserDefaults: `baseline` (default), `context` (variant A/B),
+    /// `semantic` (variant C). Not exposed in the Settings UI; set with e.g.
+    /// `defaults write com.evgeny.bindall AutocompleteVariant -string context`.
+    private static let variantKey = "AutocompleteVariant"
+
+    /// The selected ranking mode. A `defaults write` on `AutocompleteVariant` (baseline|context|
+    /// semantic) overrides the settings for experiments; otherwise the settings decide: the semantic
+    /// mode is experimental and never on by default, context ranking is the default behavior.
+    private func rankingMode() -> AutocompleteEngine.Mode {
+        if let raw = UserDefaults.standard.string(forKey: Self.variantKey), !raw.isEmpty {
+            return AutocompleteEngine.Mode(rawValue: raw) ?? .baseline
+        }
+        return config.contextRanking ? .context : .baseline
+    }
+
+    /// Context scorer for the mode, or nil when the mode does not use one. Called on the work queue
+    /// (read-only store access). For the context mode it closes over the two preceding words so the
+    /// engine can score each candidate with `store.contextScore`.
+    private func contextScorer(mode: AutocompleteEngine.Mode, prev1: String?, prev2: String?) -> ((String) -> Double)? {
+        guard mode == .context else { return nil }
+        let p1 = prev1, p2 = prev2
+        return { [store] word in store.contextScore(word: word, prev1: p1, prev2: p2) }
+    }
+
+    /// Semantic scorer for the mode, or nil when the mode does not use one. Called on the work
+    /// queue. For the semantic mode it closes over the context words and scores each candidate by
+    /// cosine similarity against the context embedding (falls back to 0 when the model is not
+    /// ready, which degrades the mode to the pool order).
+    private func semanticScorer(mode: AutocompleteEngine.Mode, context: String) -> ((String) -> Double)? {
+        guard mode == .semantic, !context.isEmpty else { return nil }
+        return { word in SemanticRanker.shared.similarity(context: context, candidate: word) ?? 0 }
+    }
 
     /// Applies user settings.
     func configure(_ config: Config) {
@@ -115,6 +151,9 @@ final class AutocompleteController {
 
     func start() {
         guard !running, AccessibilityPermission.isGranted else { return }
+        // Preload the semantic embedding model (if its assets are available) so the first
+        // suggestion in semantic mode is not delayed by model loading.
+        SemanticRanker.shared.warmup()
         let mask = (1 << CGEventType.keyDown.rawValue)
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
@@ -428,6 +467,10 @@ final class AutocompleteController {
             guard let self else { return }
             let resolvedPartial: String
             let resolvedAnchor: NSPoint
+            // Context for the re-ranking modes: the completed words before the caret. Prefer the AX
+            // field text (it is the source of truth for the partial); fall back to the keystroke
+            // tracker for apps that expose no text.
+            var contextWords: [String] = []
             switch self.focusState() {
             case .secure:
                 self.applyOnMain(gen) { $0.resetWord() }
@@ -435,18 +478,31 @@ final class AutocompleteController {
             case .text(let info):
                 resolvedPartial = AutocompleteEngine.partialWord(in: info.text, caretUTF16Offset: info.caret)
                 resolvedAnchor = self.anchor(for: info.element, caret: info.caret, primaryHeight: primaryHeight)
+                contextWords = AutocompleteEngine.precedingWords(in: info.text, caretUTF16Offset: info.caret, count: 2)
             case .unavailable:
                 resolvedPartial = fallback
                 resolvedAnchor = self.mouseAnchor()
+                if !self.prevWord.isEmpty { contextWords.append(self.prevWord) }
+                if !self.prevWord2.isEmpty { contextWords.append(self.prevWord2) }
             }
 
             guard resolvedPartial.count >= self.minPrefix else {
                 self.applyOnMain(gen) { $0.clearSuggestion() }
                 return
             }
-            let learned = cfg.learn ? self.store.completions(matching: resolvedPartial, limit: cfg.maxSuggestions) : []
-            let list = AutocompleteEngine.suggestions(for: resolvedPartial, languages: cfg.languages,
-                                                      learned: learned, limit: cfg.maxSuggestions)
+            // The re-ranking modes score a larger candidate pool than the visible list, so ask the
+            // store for more learned completions in those modes.
+            let mode = self.rankingMode()
+            let learnedLimit = mode == .baseline ? cfg.maxSuggestions
+                                                 : max(AutocompleteEngine.reRankPoolLimit, cfg.maxSuggestions)
+            let learned = cfg.learn ? self.store.completions(matching: resolvedPartial, limit: learnedLimit) : []
+            var req = AutocompleteEngine.Request(partial: resolvedPartial, languages: cfg.languages,
+                                                 learned: learned, limit: cfg.maxSuggestions, mode: mode)
+            req.contextScorer = self.contextScorer(mode: mode,
+                                                   prev1: contextWords.first,
+                                                   prev2: contextWords.count > 1 ? contextWords[1] : nil)
+            req.semanticScorer = self.semanticScorer(mode: mode, context: contextWords.joined(separator: " "))
+            let list = AutocompleteEngine.suggestions(request: req)
             self.applyOnMain(gen) { me in
                 guard !list.isEmpty else { me.clearSuggestion(); return }
                 me.partial = resolvedPartial

@@ -41,13 +41,21 @@ final class AutocompleteLearningStore {
     }
 
     private var model = Model()
-    /// Bundled seed bigrams (Russian only) used as a final next-word backoff. Read-only.
+    /// Bundled seed bigrams (Russian only, Google Books) used as the final next-word backoff — the
+    /// next-word feature is deliberately frozen, so this table is not touched by the completion
+    /// experiment. Read-only.
     private var seedBigrams: [String: [String: Int]] = [:]
+    /// Bundled context bigrams (Russian only, Leipzig news corpus) used by the context-score level
+    /// for current-word completion ranking. Read-only.
+    private var seedBigramsContext: [String: [String: Int]] = [:]
+    /// Bundled seed trigrams (Russian only, Leipzig news corpus), keyed by `trigramKey(prev2, prev1)`,
+    /// used as a stronger context-score level than the seed bigrams. Read-only.
+    private var seedTrigrams: [String: [String: Int]] = [:]
     private let fileURL: URL
     /// Pending debounced save; guarded by `lock`.
     private var saveDebounce: DispatchWorkItem?
 
-    init(fileURL: URL? = nil) {
+    init(fileURL: URL? = nil, seedURL: URL? = nil, contextSeedURL: URL? = nil, trigramSeedURL: URL? = nil) {
         if let fileURL {
             self.fileURL = fileURL
         } else {
@@ -57,20 +65,41 @@ final class AutocompleteLearningStore {
             self.fileURL = dir.appendingPathComponent("autocomplete.json")
         }
         load()
-        loadSeed()
+        // Explicit URLs override the bundle lookups so tests/CLI can point at the same data files.
+        if let url = seedURL ?? Bundle.main.url(forResource: "ru_bigrams", withExtension: "txt") {
+            seedBigrams = Self.loadBigrams(from: url)
+        }
+        if let url = contextSeedURL ?? Bundle.main.url(forResource: "ru_bigrams_ctx", withExtension: "txt") {
+            seedBigramsContext = Self.loadBigrams(from: url)
+        }
+        if let url = trigramSeedURL ?? Bundle.main.url(forResource: "ru_trigrams", withExtension: "txt") {
+            seedTrigrams = Self.loadTrigrams(from: url)
+        }
     }
 
-    /// Loads the bundled Russian bigram seed (tab-separated: prev, next, freq). Missing file is fine.
-    private func loadSeed() {
-        guard let url = Bundle.main.url(forResource: "ru_bigrams", withExtension: "txt"),
-              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+    /// Parses a bigram seed file (tab-separated: prev, next, count). Missing/empty is fine.
+    private static func loadBigrams(from url: URL) -> [String: [String: Int]] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
         var seed: [String: [String: Int]] = [:]
         for line in text.split(separator: "\n") {
             let cols = line.split(separator: "\t")
             guard cols.count >= 3, let freq = Int(cols[2]) else { continue }
             seed[String(cols[0]), default: [:]][String(cols[1])] = freq
         }
-        seedBigrams = seed
+        return seed
+    }
+
+    /// Parses a trigram seed file (tab-separated: prev2, prev1, next, count), keyed with the same
+    /// `trigramKey` the learned model uses. Missing/empty is fine.
+    private static func loadTrigrams(from url: URL) -> [String: [String: Int]] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+        var seed: [String: [String: Int]] = [:]
+        for line in text.split(separator: "\n") {
+            let cols = line.split(separator: "\t")
+            guard cols.count >= 4, let freq = Int(cols[3]) else { continue }
+            seed[Self.trigramKey(String(cols[0]), String(cols[1])), default: [:]][String(cols[2])] = freq
+        }
+        return seed
     }
 
     var wordCount: Int { withLock { model.wordCounts.count } }
@@ -137,6 +166,58 @@ final class AutocompleteLearningStore {
             }
             return Array(out.prefix(limit))
         }
+    }
+
+    /// Context-aware score for ranking *current-word completions*: how likely is `word` to follow
+    /// `prev1`/`prev2` (up to two preceding words). Interpolated evidence with the same precedence as
+    /// `nextWords()` (learned trigram > learned bigram > seed trigram > seed bigram > personal
+    /// frequency), each level normalized to its context maximum so counts of different scales (seed
+    /// corpora vs personal typing) stay comparable. Non-negative; 0 means no evidence. Read-only.
+    func contextScore(word: String, prev1: String?, prev2: String?) -> Double {
+        let w = word.lowercased()
+        return withLock {
+            var score = 0.0
+
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let p2 = prev2?.lowercased(), !p2.isEmpty,
+               let following = model.trigrams[Self.trigramKey(p2, p1)], let c = following[w] {
+                score += 1000.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let following = model.bigrams[p1], let c = following[w] {
+                score += 100.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let p2 = prev2?.lowercased(), !p2.isEmpty,
+               let following = seedTrigrams[Self.trigramKey(p2, p1)], let c = following[w] {
+                score += 30.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let following = seedBigramsContext[p1], let c = following[w] {
+                score += 10.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let c = model.wordCounts[w] {
+                score += 1.0 * relative(c, to: model.wordCounts.values.max() ?? c)
+            }
+            return score
+        }
+    }
+
+    /// Normalized personal-frequency prior for `word` (0...1 against the most-used learned word).
+    /// 0 when the word was never learned. Used by the semantic variant to keep learned vocabulary
+    /// ahead of dictionary words that are merely semantically close.
+    func frequencyScore(word: String) -> Double {
+        let w = word.lowercased()
+        return withLock {
+            guard let c = model.wordCounts[w] else { return 0 }
+            return relative(c, to: model.wordCounts.values.max() ?? c)
+        }
+    }
+
+    /// Normalizes `count` to the 0...1 range against `max` of its context distribution.
+    private func relative(_ count: Int, to max: Int) -> Double {
+        guard max > 0 else { return 0 }
+        return Double(count) / Double(max)
     }
 
     /// All learned words, most-used first (for the management UI).
