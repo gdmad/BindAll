@@ -133,6 +133,38 @@ eq(AutocompleteEngine.recased("apple", like: "APP"), "APPLE", "all-caps partial 
 eq(AutocompleteEngine.recased("apple", like: "app"), "apple", "lowercase keeps dictionary case")
 eq(AutocompleteEngine.recased("iPhone", like: "iph"), "iPhone", "lowercase keeps proper-noun case")
 
+print("Autocomplete precedingWords")
+func eqArr(_ a: [String], _ b: [String], _ message: String) {
+    check(a == b, "\(message)  (got: \(a))")
+}
+eqArr(AutocompleteEngine.precedingWords(in: "hello wor", caretUTF16Offset: 9, count: 2),
+      ["hello"], "word before the partial")
+eqArr(AutocompleteEngine.precedingWords(in: "hello world ", caretUTF16Offset: 12, count: 2),
+      ["world", "hello"], "two words back after a space")
+eqArr(AutocompleteEngine.precedingWords(in: "я хочу пойд", caretUTF16Offset: 11, count: 2),
+      ["хочу", "я"], "russian context, most recent first")
+eqArr(AutocompleteEngine.precedingWords(in: "привет,", caretUTF16Offset: 7, count: 2),
+      ["привет"], "comma-terminated word still collected")
+eqArr(AutocompleteEngine.precedingWords(in: "a b c d", caretUTF16Offset: 7, count: 2),
+      ["c", "b"], "count limits the walk")
+eqArr(AutocompleteEngine.precedingWords(in: "пойд", caretUTF16Offset: 4, count: 2),
+      [], "no context at the start")
+
+print("Autocomplete context ranking")
+let ctxBase = ["пойдем", "пойду", "пойдешь"]
+let scored = AutocompleteEngine.suggestions(request: .init(
+    partial: "пойд", languages: ["ru"], learned: ctxBase, limit: 3,
+    mode: .context,
+    contextScorer: { w in w == "пойду" ? 100 : 0 }))
+eqArr(Array(scored.prefix(3)), ["пойду", "пойдем", "пойдешь"], "context scorer re-ranks the pool")
+let unscored = AutocompleteEngine.suggestions(request: .init(
+    partial: "пойд", languages: ["ru"], learned: ctxBase, limit: 3, mode: .context))
+eqArr(unscored, ["пойдем", "пойду", "пойдешь"], "no scorer keeps the pool order")
+let guessesOff = AutocompleteEngine.suggestions(request: .init(
+    partial: "коф", languages: ["ru"], learned: [], limit: 5, mode: .context))
+check(!guessesOff.contains("кафе"), "context mode does not use spelling guesses (коф -> кафе)")
+
+
 print("Autocomplete isWordTerminator")
 check(AutocompleteEngine.isWordTerminator("."), "period ends a word")
 check(AutocompleteEngine.isWordTerminator(","), "comma ends a word")
