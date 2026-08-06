@@ -114,10 +114,10 @@ private struct PopoverView: View {
                     .font(.system(size: fontSize - 2))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                Spacer(minLength: 8)
                 Text(position)
                     .font(.system(size: fontSize - 3))
                     .foregroundStyle(.tertiary)
+                Spacer(minLength: 8)
             }
             .padding(.horizontal, 5)
             .padding(.top, 3)
