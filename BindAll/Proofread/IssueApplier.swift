@@ -57,14 +57,14 @@ enum IssueApplier {
                                             replacement as CFString) == .success {
                 if verify(element: element, at: range.location, equals: replacement) {
                     log.debug("path A write verified")
-                    return .applied(replacedRange: range)
+                    return .applied(replacedRange: ourRange)
                 }
                 // The write claimed success but the text did not change. The write may still have
                 // landed asynchronously (the AX value lags the editor), so check for it; otherwise
                 // fall through to the paste path instead of returning stale.
                 if writeLanded(replacement: replacement, near: range.location, in: element) {
                     log.debug("path A claimed success and the write landed asynchronously")
-                    return .applied(replacedRange: range)
+                    return .applied(replacedRange: ourRange)
                 }
                 log.debug("path A claimed success but did not land; falling through to the paste path")
             }
@@ -82,7 +82,7 @@ enum IssueApplier {
             let ns = now as NSString
             if NSMaxRange(range) <= ns.length, ns.substring(with: range) == replacement {
                 log.debug("the fix is already in the field; skipping the paste")
-                return .applied(replacedRange: range)
+                return .applied(replacedRange: ourRange)
             }
         }
         // select() returning success does not mean the selection took: Chromium updates its
@@ -99,7 +99,7 @@ enum IssueApplier {
         TextInjector.replaceSelection(with: replacement, restorePrevious: restoreClipboard,
                                       target: TextInjector.FocusTarget(
                                           app: NSRunningApplication(processIdentifier: pid)))
-        return .applied(replacedRange: range)
+        return .applied(replacedRange: ourRange)
     }
 
     /// Whether a write that claimed success actually replaced the word near `location`: re-reads the

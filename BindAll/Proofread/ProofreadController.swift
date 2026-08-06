@@ -32,6 +32,7 @@ final class ProofreadController {
     private var provider: LanguageToolProofreadProvider?
     private let popover = ProofreadPopover()
     private let underlines = UnderlineOverlay()
+    private static let log = Logger(subsystem: "com.evgeny.bindall", category: "proofread")
 
     // Live state: what was found in the focused field. Outlives the popup -- the underlines stay up
     // while the user reads, and a click can open the fixes without another round trip.
@@ -164,10 +165,12 @@ final class ProofreadController {
 
         let sameField = target?.element == found.element
         target = found
-        if sameField, found.text == lastCheckedText {
-            showFixes(overlapping: probe) // already known: no round trip
-            return
+        if sameField, found.text == lastCheckedText,
+           showFixes(overlapping: probe) {
+            return // already known: no round trip
         }
+        // Either the text is new or the click missed every known issue (ranges may have drifted
+        // after an applied fix). Re-check and open the popup from the fresh result.
         check(text: found.text, offset: 0, selection: probe)
     }
 
@@ -235,16 +238,21 @@ final class ProofreadController {
     }
 
     /// Opens the popup for the issue under `probe`, if there is one. Keeps the underlines either way.
-    private func showFixes(overlapping probe: NSRange) {
+    /// Returns whether a popup was opened, so a click on a range that no longer holds an issue can
+    /// fall back to a fresh check instead of silently doing nothing.
+    @discardableResult
+    private func showFixes(overlapping probe: NSRange) -> Bool {
         guard let issue = IssueMerger.firstIssue(in: issues, overlapping: probe),
               let index = issues.firstIndex(where: { $0.id == issue.id }) else {
+            Self.log.debug("no issue overlaps the click probe \(probe); falling back to a re-check")
             endNavigation()
-            return
+            return false
         }
         // Select the issue natively (like the shortcut path) so the user sees exactly what will be
         // replaced before accepting. Safe re-entrancy: the click monitor reacts only to real
         // mouse-ups, and an AX selection write generates none.
         focusIssue(index)
+        return true
     }
 
     private func redrawUnderlines() {
@@ -335,9 +343,16 @@ final class ProofreadController {
     }
 
     private func accept() {
-        guard !isApplying else { return } // applying waits for the selection to settle; ignore repeats
+        guard !isApplying else {
+            Self.log.debug("accept ignored: a fix is already being applied")
+            return
+        }
         guard let issue = issues[safe: currentIndex],
-              let replacement = issue.replacements[safe: selectedReplacement] else { step(1); return }
+              let replacement = issue.replacements[safe: selectedReplacement] else {
+            Self.log.debug("accept: no issue/replacement at \(self.currentIndex)/\(self.selectedReplacement)")
+            step(1)
+            return
+        }
         guard let target else {
             // No AX element: the best we can do is hand them the corrected word.
             TextInjector.copyToPasteboard(replacement)
@@ -379,17 +394,22 @@ final class ProofreadController {
 
     /// Waits for the applied fix to actually show up in the field (Chromium pastes asynchronously)
     /// and then re-checks it. Re-checking rather than trusting local arithmetic is what keeps the
-    /// next fix honest: every range then comes from the text as it really is.
+    /// next fix honest: every range then comes from the text as it really is. The re-check always
+    /// runs -- even when the value never changed or another check started meanwhile -- so the
+    /// underlines can never silently go stale after a fix.
     private func recheckAfterWrite(previousText: String) {
-        let gen = generation
         Task { @MainActor [weak self] in
+            var changed = false
             for _ in 0..<12 {
                 try? await Task.sleep(nanoseconds: 60_000_000)
-                guard let self, gen == self.generation, let element = self.target?.element else { return }
+                guard let self, let element = self.target?.element else { return }
                 guard let now = ProofreadAX.currentText(of: element) else { continue }
-                if now != previousText { break }
+                if now != previousText { changed = true; break }
             }
-            guard let self, gen == self.generation else { return }
+            guard let self else { return }
+            if !changed {
+                Self.log.warning("field text did not change after an applied fix; the paste may not have landed")
+            }
             self.lastCheckedText = "" // force a real check, not a redraw
             self.typingPaused()
         }
