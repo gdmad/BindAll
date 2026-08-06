@@ -109,14 +109,13 @@ final class UnderlineOverlay {
     }
 
     /// Colors mirror ProofreadPopover.color (SwiftUI Color there, NSColor here); keep them in sync.
-    /// Spelling is purple, not red: macOS draws its own red squiggles in many apps and the two
-    /// must not be mistaken for each other.
+    /// Matches LanguageTool's own palette: red spelling, yellow grammar, green punctuation, blue style.
     private static func color(for kind: IssueKind) -> NSColor {
         switch kind {
-        case .spelling: return .systemPurple
-        case .grammar: return .systemOrange
-        case .punctuation: return .systemBlue
-        case .style: return .systemGray
+        case .spelling: return .systemRed
+        case .grammar: return .systemYellow
+        case .punctuation: return .systemGreen
+        case .style: return .systemBlue
         }
     }
 

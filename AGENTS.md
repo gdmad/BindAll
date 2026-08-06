@@ -95,7 +95,8 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Shift+Cmd+E** → Quick Translate window
 - **Proofread** (LanguageTool), only when enabled in Settings → General, has **no shortcut**: a
   pause in typing (~0.6 s) re-checks the focused field and underlines every issue in place
-  (squiggles; spelling is purple so it is not mistaken for the red one macOS draws). Clicking an
+  (squiggles; spelling is red, grammar yellow, punctuation green, style blue -- LanguageTool's own
+  palette). Clicking an
   underlined word shows its fixes instantly -- the issues are already known, no round trip. In the
   popup: up/down arrows or mouse hover choose a fix, Return or a click applies it, Tab and the
   left/right arrows step between problem words (wrapping around), Esc closes it (the underlines

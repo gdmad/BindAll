@@ -168,12 +168,14 @@ private struct PopoverView: View {
                     in: RoundedRectangle(cornerRadius: 4))
     }
 
+    /// Matches the underline colors (LanguageTool palette: red spelling, yellow grammar,
+    /// green punctuation, blue style).
     private var color: Color {
         switch kind {
         case .spelling: return .red
-        case .grammar: return .orange
-        case .punctuation: return .blue
-        case .style: return .gray
+        case .grammar: return .yellow
+        case .punctuation: return .green
+        case .style: return .blue
         }
     }
 }
