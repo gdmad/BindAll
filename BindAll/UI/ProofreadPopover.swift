@@ -195,7 +195,7 @@ private struct PopoverView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 5))
-        .scaleEffect(index == selected ? 1.05 : 1.0)
+        .scaleEffect(index == selected ? 1.10 : 1.0)
         .animation(.easeOut(duration: 0.12), value: index == selected)
         .contentShape(Rectangle())
         .onTapGesture { onAccept(index) }
@@ -212,7 +212,7 @@ private struct PopoverView: View {
             .padding(.vertical, 4)
             .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 5))
-            .scaleEffect(index == selected ? 1.05 : 1.0)
+            .scaleEffect(index == selected ? 1.10 : 1.0)
             .animation(.easeOut(duration: 0.12), value: index == selected)
             .contentShape(Rectangle())
             .onTapGesture { onAccept(index) }

@@ -562,7 +562,9 @@ final class AutocompleteController {
         switch config.layout {
         case .column: next = max(0, min(count - 1, selectedIndex + dy))
         case .line: next = max(0, min(count - 1, selectedIndex + dx))
-        case .tile: next = PopupLayout.tileIndex(from: selectedIndex, deltaX: dx, deltaY: dy, count: count)
+        case .tile:
+            next = PopupLayout.tileIndex(from: selectedIndex, deltaX: dx, deltaY: dy, count: count,
+                                         topRowCount: overlay.lastTileTopCount)
         }
         guard next != selectedIndex else { return }
         selectedIndex = next

@@ -5,13 +5,19 @@ import SwiftUI
 /// key window, so it does not steal focus from the text field being typed into.
 final class AutocompleteOverlay {
     private var panel: NSPanel?
+    /// How many items the last tile presentation put on its first row (0 = not a tile / even split).
+    /// The controller reads this so vertical arrow navigation jumps by the real column count.
+    private(set) var lastTileTopCount = 0
 
     /// Shows `items` (with `selected` highlighted) anchored so its top-left sits at `topLeft`
     /// (AppKit screen coordinates, bottom-left origin). `layout` arranges them in a column, a single
     /// line, or a two-row tile.
     func show(_ items: [String], selected: Int, layout: PopupLayout, fontSize: CGFloat, topLeft: NSPoint) {
+        let topCount = layout == .tile ? Self.tileTopCount(for: items, fontSize: fontSize, near: topLeft) : 0
+        lastTileTopCount = topCount
         let host = NSHostingController(rootView: ListView(items: items, selected: selected,
-                                                          layout: layout, fontSize: fontSize))
+                                                          layout: layout, fontSize: fontSize,
+                                                          tileTopCount: topCount))
         let panel = self.panel ?? makePanel()
         panel.contentViewController = host
         panel.layoutIfNeeded()
@@ -19,6 +25,31 @@ final class AutocompleteOverlay {
         panel.setContentSize(size)
         panel.setFrameOrigin(clamp(NSPoint(x: topLeft.x, y: topLeft.y - size.height), size: size))
         panel.orderFront(nil) // NOT makeKey: must not take focus from the text field.
+    }
+
+    /// How many items fit on the first row of a tile, measured with the same font the chips use.
+    /// Words are packed left to right until the next one would overflow the screen, so every word
+    /// that fits stays on the first row; a word that alone exceeds the width still gets its own row.
+    private static func tileTopCount(for items: [String], fontSize: CGFloat, near topLeft: NSPoint) -> Int {
+        guard items.count > 1 else { return items.count }
+        let probe = NSPoint(x: topLeft.x, y: topLeft.y + 10)
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(probe) }) ?? NSScreen.main else {
+            return PopupLayout.tileColumns(forCount: items.count)
+        }
+        let maxWidth = min(screen.visibleFrame.width - 80, 600)
+        let maxContent = maxWidth - 4 // outer padding 2 + 2
+        let font = NSFont.systemFont(ofSize: fontSize)
+        var used: CGFloat = 0
+        var topCount = 0
+        for word in items {
+            let textWidth = (word as NSString).size(withAttributes: [.font: font]).width
+            let chip = ceil(textWidth) + 12 // horizontal padding 5 + 5, plus a little slack
+            let withSpacing = chip + (topCount > 0 ? 4 : 0) // HStack spacing between chips
+            if topCount > 0, used + withSpacing > maxContent { break }
+            used += withSpacing
+            topCount += 1
+        }
+        return max(1, topCount)
     }
 
     func hide() {
@@ -57,6 +88,8 @@ private struct ListView: View {
     let selected: Int
     let layout: PopupLayout
     let fontSize: CGFloat
+    /// Items on the first row of a tile, measured in `AutocompleteOverlay.show()`; 0 = even split.
+    var tileTopCount = 0
 
     var body: some View {
         Group {
@@ -70,11 +103,11 @@ private struct ListView: View {
                     ForEach(itemIndices, id: \.self) { chip($0) }
                 }
             case .tile:
-                // Two rows, filled left to right; the grid math matches PopupLayout.tileIndex. Both
-                // rows start at the leading edge -- a shorter second row must not be centered.
-                let columns = PopupLayout.tileColumns(forCount: items.count)
-                let topRow = Array(items.indices.prefix(columns))
-                let bottomRow = Array(items.indices.dropFirst(columns))
+                // Two rows, filled left to right. The split is measured in show(), so every word
+                // that fits stays on the first row. Both rows start at the leading edge.
+                let topCount = tileTopCount > 0 ? tileTopCount : PopupLayout.tileColumns(forCount: items.count)
+                let topRow = Array(items.indices.prefix(topCount))
+                let bottomRow = Array(items.indices.dropFirst(topCount))
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) { ForEach(topRow, id: \.self) { chip($0) } }
                     if !bottomRow.isEmpty {
@@ -102,7 +135,7 @@ private struct ListView: View {
             .frame(maxWidth: layout == .column ? .infinity : nil, alignment: .leading)
             .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 4))
-            .scaleEffect(index == selected ? 1.05 : 1.0)
+            .scaleEffect(index == selected ? 1.10 : 1.0)
             .animation(.easeOut(duration: 0.12), value: index == selected)
     }
 }

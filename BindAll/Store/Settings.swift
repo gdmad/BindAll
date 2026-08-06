@@ -149,12 +149,18 @@ enum PopupLayout: String, Codable, CaseIterable {
 
     /// Moves a selection by `deltaX`/`deltaY` steps inside a two-row tile grid of `count` items.
     /// Horizontal movement walks the row-major order and wraps; vertical movement steps a whole row
-    /// (columns) and clamps at the ends.
-    static func tileIndex(from index: Int, deltaX: Int, deltaY: Int, count: Int) -> Int {
+    /// (columns) and clamps at the ends. `topRowCount` overrides the column count with the number of
+    /// items actually placed on the first row (a width-measured split); 0 falls back to the even
+    /// `tileColumns` split.
+    static func tileIndex(from index: Int, deltaX: Int, deltaY: Int, count: Int,
+                          topRowCount: Int = 0) -> Int {
         guard count > 0 else { return 0 }
         let clamped = max(0, min(index, count - 1))
         if deltaX != 0 { return (clamped + deltaX + count) % count }
-        if deltaY != 0 { return max(0, min(count - 1, clamped + deltaY * tileColumns(forCount: count))) }
+        if deltaY != 0 {
+            let columns = topRowCount > 0 ? topRowCount : tileColumns(forCount: count)
+            return max(0, min(count - 1, clamped + deltaY * columns))
+        }
         return clamped
     }
 }

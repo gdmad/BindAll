@@ -559,6 +559,21 @@ check(PopupLayout.tileIndex(from: 3, deltaX: 0, deltaY: -1, count: 5) == 0, "til
 check(PopupLayout.tileIndex(from: 4, deltaX: 0, deltaY: -1, count: 5) == 1, "tile up col 2")
 check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: -1, count: 5) == 0, "tile up clamps at the start")
 check(PopupLayout.tileIndex(from: 3, deltaX: 1, deltaY: 0, count: 2) == 0, "tile wraps in a one-column grid")
+// A width-measured first row changes the vertical jump, not the horizontal walk.
+check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: 1, count: 6, topRowCount: 4) == 4,
+      "measured top row: down lands under the same column")
+check(PopupLayout.tileIndex(from: 1, deltaX: 0, deltaY: 1, count: 6, topRowCount: 4) == 5,
+      "measured top row: down col 2")
+check(PopupLayout.tileIndex(from: 2, deltaX: 0, deltaY: 1, count: 6, topRowCount: 4) == 5,
+      "measured top row: down clamps when the second row is shorter")
+check(PopupLayout.tileIndex(from: 5, deltaX: 0, deltaY: -1, count: 6, topRowCount: 4) == 1,
+      "measured top row: up col 2")
+check(PopupLayout.tileIndex(from: 4, deltaX: 1, deltaY: 0, count: 6, topRowCount: 4) == 5,
+      "measured top row: horizontal walk unchanged")
+check(PopupLayout.tileIndex(from: 5, deltaX: 1, deltaY: 0, count: 6, topRowCount: 4) == 0,
+      "measured top row: horizontal wraps")
+check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: 1, count: 6) == 3,
+      "default topRowCount keeps the even split")
 
 print("LanguageToolEngine.authParams")
 let loneUser = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", apiKey: "")
