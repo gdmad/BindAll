@@ -109,7 +109,7 @@ private struct PopoverView: View {
     let onAccept: (Int) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
                 Circle().fill(color).frame(width: 6, height: 6)
                 Text(title)
@@ -132,39 +132,40 @@ private struct PopoverView: View {
                     .padding(.bottom, 3)
             } else {
                 fixes
-                    .padding(.bottom, 2)
+                    .padding(.bottom, 4)
             }
         }
-        .frame(minWidth: 150, maxWidth: 320, alignment: .leading)
-        .padding(2)
+        .frame(minWidth: 150, maxWidth: 480, alignment: .leading)
+        .padding(4)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary, lineWidth: 1))
         .fixedSize()
     }
 
     /// The fixes in the chosen layout: full-width rows in a column, compact chips in a line, and a
-    /// two-row grid of chips in the tile (the grid math matches PopupLayout.tileIndex).
+    /// two-row grid of chips in the tile (the grid math matches PopupLayout.tileIndex). Both tile
+    /// rows start at the leading edge -- a shorter second row must not be centered.
     private var fixes: some View {
         Group {
             switch layout {
             case .column:
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(replacementIndices, id: \.self) { index in
                         fixRow(index)
                     }
                 }
             case .line:
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     ForEach(replacementIndices, id: \.self) { chip($0) }
                 }
             case .tile:
                 let columns = PopupLayout.tileColumns(forCount: replacements.count)
                 let top = Array(replacementIndices.prefix(columns))
                 let bottom = Array(replacementIndices.dropFirst(columns))
-                VStack(spacing: 4) {
-                    HStack(spacing: 4) { ForEach(top, id: \.self) { chip($0) } }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) { ForEach(top, id: \.self) { chip($0) } }
                     if !bottom.isEmpty {
-                        HStack(spacing: 4) { ForEach(bottom, id: \.self) { chip($0) } }
+                        HStack(spacing: 6) { ForEach(bottom, id: \.self) { chip($0) } }
                     }
                 }
             }
@@ -174,13 +175,14 @@ private struct PopoverView: View {
     private var replacementIndices: [Int] { Array(replacements.indices) }
 
     // Weight is constant so the popup does not resize as the selection moves. The selected row uses
-    // the system selection colors (the same pill macOS menus use), which adapt to light and dark.
+    // the system selection colors (the same pill macOS menus use), which adapt to light and dark,
+    // and scales up slightly so the chosen fix stands out beyond color alone. Words are never
+    // truncated: a long fix wraps instead of ending in an ellipsis.
     private func fixRow(_ index: Int) -> some View {
         HStack(spacing: 6) {
             Text(replacements[index])
                 .font(.system(size: fontSize))
                 .foregroundStyle(index == selected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
-                .lineLimit(1)
             Spacer(minLength: 4)
             if index == selected {
                 Text("Return")
@@ -189,10 +191,12 @@ private struct PopoverView: View {
             }
         }
         .padding(.horizontal, 5)
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 5))
+        .scaleEffect(index == selected ? 1.05 : 1.0)
+        .animation(.easeOut(duration: 0.12), value: index == selected)
         .contentShape(Rectangle())
         .onTapGesture { onAccept(index) }
         // The guard avoids a hover -> re-render -> hover feedback loop.
@@ -204,11 +208,12 @@ private struct PopoverView: View {
         Text(replacements[index])
             .font(.system(size: fontSize))
             .foregroundStyle(index == selected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
-            .lineLimit(1)
             .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .padding(.vertical, 4)
             .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 5))
+            .scaleEffect(index == selected ? 1.05 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: index == selected)
             .contentShape(Rectangle())
             .onTapGesture { onAccept(index) }
             .onHover { inside in if inside && index != selected { onHover(index) } }

@@ -70,11 +70,12 @@ private struct ListView: View {
                     ForEach(itemIndices, id: \.self) { chip($0) }
                 }
             case .tile:
-                // Two rows, filled left to right; the grid math matches PopupLayout.tileIndex.
+                // Two rows, filled left to right; the grid math matches PopupLayout.tileIndex. Both
+                // rows start at the leading edge -- a shorter second row must not be centered.
                 let columns = PopupLayout.tileColumns(forCount: items.count)
                 let topRow = Array(items.indices.prefix(columns))
                 let bottomRow = Array(items.indices.dropFirst(columns))
-                VStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) { ForEach(topRow, id: \.self) { chip($0) } }
                     if !bottomRow.isEmpty {
                         HStack(spacing: 4) { ForEach(bottomRow, id: \.self) { chip($0) } }
@@ -90,16 +91,18 @@ private struct ListView: View {
     private var itemIndices: [Int] { Array(items.indices) }
 
     // Weight stays constant (only the background and color change on selection) so the layout does
-    // not resize as the selection moves.
+    // not resize as the selection moves. The selected chip scales up slightly; words are never
+    // truncated (a long completion wraps instead of ending in an ellipsis).
     private func chip(_ index: Int) -> some View {
         Text(items[index])
             .font(.system(size: fontSize, weight: .regular))
             .foregroundStyle(index == selected ? Color.accentColor : Color.primary)
-            .lineLimit(1)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .frame(maxWidth: layout == .column ? .infinity : nil, alignment: .leading)
             .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 4))
+            .scaleEffect(index == selected ? 1.05 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: index == selected)
     }
 }
