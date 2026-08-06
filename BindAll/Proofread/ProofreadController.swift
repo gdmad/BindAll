@@ -47,7 +47,7 @@ final class ProofreadController {
     private var generation = 0
 
     /// Typing pause that triggers a live re-check.
-    private let typingPause: TimeInterval = 0.3
+    private let typingPause: TimeInterval = 0.6
     private var keyMonitor: Any?
     private var typingDebounce: DispatchWorkItem?
 
@@ -390,8 +390,8 @@ final class ProofreadController {
     private func recheckAfterWrite(previousText: String) {
         let gen = generation
         Task { @MainActor [weak self] in
-            for _ in 0..<20 {
-                try? await Task.sleep(nanoseconds: 40_000_000)
+            for _ in 0..<12 {
+                try? await Task.sleep(nanoseconds: 60_000_000)
                 guard let self, gen == self.generation, let element = self.target?.element else { return }
                 guard let now = ProofreadAX.currentText(of: element) else { continue }
                 if now != previousText { break }

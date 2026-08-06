@@ -32,46 +32,22 @@ actor LanguageToolProofreadProvider {
     }
 
     /// Checks `text`, returning issues in `text`'s own coordinates.
-    ///
-    /// Paragraphs that have not changed since the last check come from the cache instantly; the
-    /// changed ones are checked concurrently, so editing several paragraphs costs one round trip
-    /// instead of one per paragraph. Results are re-ordered back into document order.
     func check(_ text: String) async throws -> [TextIssue] {
         let paragraphs = TextSegmenter.paragraphs(of: text)
-        var results: [(index: Int, issues: [TextIssue])] = []
-        try await withThrowingTaskGroup(of: (Int, [TextIssue]).self) { group in
-            for (index, paragraph) in paragraphs.enumerated() where TextSegmenter.isCheckable(paragraph) {
-                group.addTask {
-                    let local: [TextIssue]
-                    if let cached = await self.cachedIssues(for: paragraph) {
-                        local = cached
-                    } else {
-                        let matches = try await self.engine.check(paragraph.text,
-                                                                  languageOverride: await self.resolved(paragraph.text))
-                        local = LanguageToolEngine.issues(from: matches, text: paragraph.text)
-                        await self.storeIssues(local, for: paragraph)
-                    }
-                    return (index, local)
-                }
+        var out: [TextIssue] = []
+        for paragraph in paragraphs where TextSegmenter.isCheckable(paragraph) {
+            let local: [TextIssue]
+            if let cached = cache.issues(for: paragraph) {
+                local = cached
+            } else {
+                let matches = try await engine.check(paragraph.text, languageOverride: resolved(paragraph.text))
+                local = LanguageToolEngine.issues(from: matches, text: paragraph.text)
+                cache.store(local, for: paragraph)
             }
-            for try await result in group {
-                results.append(result)
-            }
+            out += ProofreadCache.rebase(local, to: paragraph.range.location)
         }
         cache.prune(keeping: paragraphs)
-        let rebased = results.sorted { $0.index < $1.index }
-            .flatMap { ProofreadCache.rebase($0.issues, to: paragraphs[$0.index].range.location) }
-        return IssueMerger.merge(rebased)
-    }
-
-    /// Cache reads/writes go through these so the concurrent check tasks serialize on the actor
-    /// instead of touching the cache dictionary from several threads at once.
-    private func cachedIssues(for paragraph: Paragraph) -> [TextIssue]? {
-        cache.issues(for: paragraph)
-    }
-
-    private func storeIssues(_ issues: [TextIssue], for paragraph: Paragraph) {
-        cache.store(issues, for: paragraph)
+        return IssueMerger.merge(out)
     }
 
     /// The server accepts "auto", but its guess on short Cyrillic text drifts to uk/bg. An explicit
