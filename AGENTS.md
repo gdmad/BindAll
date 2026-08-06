@@ -94,16 +94,12 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
 - **Shift+Cmd+E** → Quick Translate window
 - **Proofread** (LanguageTool), only when enabled in Settings → General, has **no shortcut**: a
-  pause in typing (~0.3 s) re-checks the focused field and underlines every issue in place
-  (squiggles; spelling is purple, grammar orange, punctuation teal, style brown -- purple so it is
-  not mistaken for the red one macOS draws). Clicking an
+  pause in typing (~0.6 s) re-checks the focused field and underlines every issue in place
+  (squiggles; spelling is purple so it is not mistaken for the red one macOS draws). Clicking an
   underlined word shows its fixes instantly -- the issues are already known, no round trip. In the
-  popup: arrows or mouse hover choose a fix (in the tile layout both arrow axes work), digits 1-9
-  pick the numbered fix, Return or a click applies it, Tab
-  steps between problem words (wrapping around), Esc closes it (the underlines
-  stay). Both popups take their text size from Settings → General, and their layout
-  (Column / Line / Tile — two rows) from their own setting; the tile and line layouts are also
-  available for autocomplete. The number of fixes listed per issue is a setting
+  popup: up/down arrows or mouse hover choose a fix, Return or a click applies it, Tab and the
+  left/right arrows step between problem words (wrapping around), Esc closes it (the underlines
+  stay). Both popups take their text size from Settings → General. The number of fixes listed per issue is a setting
   (1-10, default 3). Underlines follow scrolling and window moves, go down while typing and come
   back with the fresh result, and disappear on an app switch. Apps that expose no word coordinates
   (many Electron/web fields) get no underlines; the popup still works if their text is readable.
@@ -127,7 +123,7 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   space and learn the words you use (local
   `AutocompleteLearningStore`): a word is learned when a space or punctuation closes it, and when a
   suggestion is accepted. Return deliberately does not learn (it submits password fields).
-  Configurable: count, column/line/tile layout, text
+  Configurable: count, column/line layout, text
   size, dictionary language, and per-app allow/deny. Uses AX text+caret where available, otherwise a
   keystroke buffer (works in most apps). Skipped in password fields and BindAll's own windows.
   The ranking mode can be overridden for experiments with

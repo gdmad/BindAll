@@ -384,18 +384,13 @@ final class ProofreadController {
         }
     }
 
-    /// Waits for the applied fix to actually show up in the field (Chromium pastes asynchronously and
-    /// can take a while to publish the new text to Accessibility) and then re-checks it. Re-checking
-    /// rather than trusting local arithmetic is what keeps the next fix honest: every range then
-    /// comes from the text as it really is. If the app never reports a change, we wait out the full
-    /// budget rather than re-checking against a text that still lacks the fix -- that is exactly how
-    /// the fix after the first one ends up with ranges from pre-fix text.
+    /// Waits for the applied fix to actually show up in the field (Chromium pastes asynchronously)
+    /// and then re-checks it. Re-checking rather than trusting local arithmetic is what keeps the
+    /// next fix honest: every range then comes from the text as it really is.
     private func recheckAfterWrite(previousText: String) {
         let gen = generation
         Task { @MainActor [weak self] in
-            // 40 ms x 60 = up to 2.4 s. Native apps publish within a poll or two; slow Chromium
-            // editors (Slack) can take a second or more to update their AX value.
-            for _ in 0..<60 {
+            for _ in 0..<20 {
                 try? await Task.sleep(nanoseconds: 40_000_000)
                 guard let self, gen == self.generation, let element = self.target?.element else { return }
                 guard let now = ProofreadAX.currentText(of: element) else { continue }
