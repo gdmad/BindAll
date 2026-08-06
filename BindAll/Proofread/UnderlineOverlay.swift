@@ -108,7 +108,17 @@ final class UnderlineOverlay {
         return panel
     }
 
-    private static func color(for kind: IssueKind) -> NSColor { kind.underlineColor }
+    /// Colors mirror ProofreadPopover.color (SwiftUI Color there, NSColor here); keep them in sync.
+    /// Spelling is purple, not red: macOS draws its own red squiggles in many apps and the two
+    /// must not be mistaken for each other.
+    private static func color(for kind: IssueKind) -> NSColor {
+        switch kind {
+        case .spelling: return .systemPurple
+        case .grammar: return .systemOrange
+        case .punctuation: return .systemBlue
+        case .style: return .systemGray
+        }
+    }
 
     private static func primaryScreenHeight() -> CGFloat {
         NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
@@ -166,24 +176,6 @@ final class UnderlineOverlay {
         let work = DispatchWorkItem { [weak self] in self?.refresh() }
         refreshWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
-    }
-}
-
-// MARK: - Palette
-
-/// Single source of truth for the proofread colors. `UnderlineOverlay` strokes squiggles with these
-/// and `ProofreadPopover` fills its badge dot with the same value, so the two can never drift apart
-/// again. Spelling is purple, not red: macOS draws its own red squiggles in many apps and the two
-/// must not be mistaken for each other. Teal and brown are picked so no two kinds collide with each
-/// other or with the system's link/selection colors.
-extension IssueKind {
-    var underlineColor: NSColor {
-        switch self {
-        case .spelling: return .systemPurple
-        case .grammar: return .systemOrange
-        case .punctuation: return .systemTeal
-        case .style: return .systemBrown
-        }
     }
 }
 

@@ -168,7 +168,14 @@ private struct PopoverView: View {
                     in: RoundedRectangle(cornerRadius: 4))
     }
 
-    private var color: Color { Color(nsColor: kind.underlineColor) }
+    private var color: Color {
+        switch kind {
+        case .spelling: return .red
+        case .grammar: return .orange
+        case .punctuation: return .blue
+        case .style: return .gray
+        }
+    }
 }
 
 private struct MessageView: View {
