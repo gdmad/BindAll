@@ -9,11 +9,15 @@ import SwiftUI
 @MainActor
 final class ProofreadPopover {
     private var panel: NSPanel?
+    /// Whether the popup is currently on screen. Only the first presentation fades in; re-showing
+    /// (every arrow key re-presents) just updates the content without animation.
+    private var isVisible = false
 
     /// Shows `issue`'s fixes with `selected` highlighted, placed above `anchor` -- the word's rect in
-    /// AppKit screen coordinates. `onHover`/`onAccept` receive the row index the mouse is on.
+    /// AppKit screen coordinates. `onHover` receives the row index and whether the mouse is over it;
+    /// `onAccept` receives the row index clicked.
     func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, fontSize: CGFloat,
-              onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
+              onHover: @escaping (Int, Bool) -> Void, onAccept: @escaping (Int) -> Void) {
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
                                original: issue.original,
                                kind: issue.kind,
@@ -32,7 +36,20 @@ final class ProofreadPopover {
     }
 
     func hide() {
-        panel?.orderOut(nil)
+        guard isVisible else { return }
+        isVisible = false
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.1
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel?.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                // A re-show during the fade-out cancels the hide; do not order out a live popup.
+                guard !self.isVisible else { return }
+                self.panel?.orderOut(nil)
+            }
+        })
     }
 
     private func present(_ view: AnyView, above anchor: CGRect) {
@@ -44,6 +61,15 @@ final class ProofreadPopover {
         panel.setContentSize(size)
         panel.setFrameOrigin(origin(for: size, above: anchor))
         panel.orderFront(nil) // NOT makeKey: the text field must keep focus.
+        if !isVisible {
+            isVisible = true
+            panel.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.13
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().alphaValue = 1
+            }
+        }
     }
 
     /// Sits above the word, so the popup never covers what it is about; drops below it only when
@@ -103,7 +129,7 @@ private struct PopoverView: View {
     let position: String
     /// Base size for the fix rows; the header and hints sit a couple of points below it.
     let fontSize: CGFloat
-    let onHover: (Int) -> Void
+    let onHover: (Int, Bool) -> Void
     let onAccept: (Int) -> Void
 
     var body: some View {
@@ -134,8 +160,7 @@ private struct PopoverView: View {
                         row(word, isSelected: index == selected)
                             .contentShape(Rectangle())
                             .onTapGesture { onAccept(index) }
-                            // The guard avoids a hover -> re-render -> hover feedback loop.
-                            .onHover { inside in if inside && index != selected { onHover(index) } }
+                            .onHover { inside in onHover(index, inside) }
                     }
                 }
                 .padding(.bottom, 2)
@@ -143,29 +168,31 @@ private struct PopoverView: View {
         }
         .frame(minWidth: 150, maxWidth: 320, alignment: .leading)
         .padding(2)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary, lineWidth: 1))
         .fixedSize()
     }
 
-    // Weight is constant so the popup does not resize as the selection moves.
+    // Weight is constant so the popup does not resize as the selection moves. The selected row uses
+    // the system selection colors (the same pill macOS menus use), which adapt to light and dark.
     private func row(_ word: String, isSelected: Bool) -> some View {
         HStack(spacing: 6) {
             Text(word)
                 .font(.system(size: fontSize))
-                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                .foregroundStyle(isSelected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
                 .lineLimit(1)
             Spacer(minLength: 4)
             if isSelected {
                 Text("Return")
                     .font(.system(size: fontSize - 3))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color(nsColor: .selectedMenuItemTextColor).opacity(0.85))
             }
         }
         .padding(.horizontal, 5)
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 4))
+        .background(isSelected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 5))
     }
 
     /// Matches the underline colors (LanguageTool palette: red spelling, yellow grammar,
@@ -195,7 +222,8 @@ private struct MessageView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary, lineWidth: 1))
         .fixedSize()
     }
 }
