@@ -9,15 +9,11 @@ import SwiftUI
 @MainActor
 final class ProofreadPopover {
     private var panel: NSPanel?
-    /// Whether the popup is currently on screen. Only the first presentation fades in; re-showing
-    /// (every arrow key re-presents) just updates the content without animation.
-    private var isVisible = false
 
     /// Shows `issue`'s fixes with `selected` highlighted, placed above `anchor` -- the word's rect in
-    /// AppKit screen coordinates. `onHover` receives the row index and whether the mouse is over it;
-    /// `onAccept` receives the row index clicked.
+    /// AppKit screen coordinates. `onHover`/`onAccept` receive the row index the mouse is on.
     func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, fontSize: CGFloat,
-              onHover: @escaping (Int, Bool) -> Void, onAccept: @escaping (Int) -> Void) {
+              onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
                                original: issue.original,
                                kind: issue.kind,
@@ -36,20 +32,7 @@ final class ProofreadPopover {
     }
 
     func hide() {
-        guard isVisible else { return }
-        isVisible = false
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.1
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel?.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in
-                // A re-show during the fade-out cancels the hide; do not order out a live popup.
-                guard !self.isVisible else { return }
-                self.panel?.orderOut(nil)
-            }
-        })
+        panel?.orderOut(nil)
     }
 
     private func present(_ view: AnyView, above anchor: CGRect) {
@@ -61,15 +44,6 @@ final class ProofreadPopover {
         panel.setContentSize(size)
         panel.setFrameOrigin(origin(for: size, above: anchor))
         panel.orderFront(nil) // NOT makeKey: the text field must keep focus.
-        if !isVisible {
-            isVisible = true
-            panel.alphaValue = 0
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.13
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().alphaValue = 1
-            }
-        }
     }
 
     /// Sits above the word, so the popup never covers what it is about; drops below it only when
@@ -129,7 +103,7 @@ private struct PopoverView: View {
     let position: String
     /// Base size for the fix rows; the header and hints sit a couple of points below it.
     let fontSize: CGFloat
-    let onHover: (Int, Bool) -> Void
+    let onHover: (Int) -> Void
     let onAccept: (Int) -> Void
 
     var body: some View {
@@ -160,7 +134,8 @@ private struct PopoverView: View {
                         row(word, isSelected: index == selected)
                             .contentShape(Rectangle())
                             .onTapGesture { onAccept(index) }
-                            .onHover { inside in onHover(index, inside) }
+                            // The guard avoids a hover -> re-render -> hover feedback loop.
+                            .onHover { inside in if inside && index != selected { onHover(index) } }
                     }
                 }
                 .padding(.bottom, 2)

@@ -31,8 +31,6 @@ final class ProofreadController {
     private var provider: LanguageToolProofreadProvider?
     private let popover = ProofreadPopover()
     private let underlines = UnderlineOverlay()
-    /// Shows the hovered replacement over the word itself, as a read-only preview.
-    private let preview = FixPreview()
 
     // Live state: what was found in the focused field. Outlives the popup -- the underlines stay up
     // while the user reads, and a click can open the fixes without another round trip.
@@ -278,24 +276,16 @@ final class ProofreadController {
                      position: "\(currentIndex + 1) of \(issues.count)",
                      anchor: anchor(for: issue),
                      fontSize: config.fontSize,
-                     onHover: { [weak self] index, inside in self?.hoverReplacement(index, inside: inside) },
+                     onHover: { [weak self] index in self?.hoverReplacement(index) },
                      onAccept: { [weak self] index in self?.acceptReplacement(index) })
     }
 
-    /// Mouse hover over a row: mirror it into the keyboard selection, and preview the hovered fix
-    /// over the word it would replace.
-    private func hoverReplacement(_ index: Int, inside: Bool) {
-        guard let issue = issues[safe: currentIndex] else { return }
-        if inside {
-            guard index >= 0, index < issue.replacements.count else { return }
-            if index != selectedReplacement {
-                selectedReplacement = index
-                showCurrent(select: false)
-            }
-            preview.show(text: issue.replacements[index], anchor: anchor(for: issue))
-        } else {
-            preview.hide()
-        }
+    /// Mouse hover over a row: mirror it into the keyboard selection.
+    private func hoverReplacement(_ index: Int) {
+        guard let issue = issues[safe: currentIndex], index >= 0, index < issue.replacements.count,
+              index != selectedReplacement else { return }
+        selectedReplacement = index
+        showCurrent(select: false)
     }
 
     /// Mouse click on a row: same path as selecting it with arrows and pressing Return.
@@ -382,12 +372,11 @@ final class ProofreadController {
     }
 
     /// Closes the popup and disarms the key tap, leaving the underlines and the found issues alone:
-    /// they belong to the field, not to this popup. The fix preview belongs to the popup, so it goes.
+    /// they belong to the field, not to this popup.
     private func endNavigation() {
         currentIndex = 0
         selectedReplacement = 0
         popover.hide()
-        preview.hide()
         setActive(false)
     }
 
@@ -401,7 +390,6 @@ final class ProofreadController {
         lastCheckedText = ""
         target = nil
         underlines.hide()
-        preview.hide()
     }
 
     private func end() {
