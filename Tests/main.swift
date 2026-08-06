@@ -532,6 +532,33 @@ func decode(_ json: String) -> Settings {
 }
 check(decode("{}").languageToolMode == .free, "mode defaults to free when absent (no migration)")
 check(decode("{\"languageToolMode\":\"premium\"}").languageToolMode == .premium, "a stored mode is kept")
+check(decode("{\"autocompleteHorizontal\":true}").autocompleteLayout == .line,
+      "legacy autocompleteHorizontal=true maps to line")
+check(decode("{\"autocompleteHorizontal\":false}").autocompleteLayout == .column,
+      "legacy autocompleteHorizontal=false maps to column")
+check(decode("{\"autocompleteLayout\":\"tile\"}").autocompleteLayout == .tile,
+      "the new autocompleteLayout wins over the legacy key")
+check(decode("{}").proofreadLayout == .column, "proofread layout defaults to column")
+
+print("PopupLayout tile grid")
+check(PopupLayout.tileColumns(forCount: 1) == 1, "one item: one column")
+check(PopupLayout.tileColumns(forCount: 2) == 1, "two items: one column")
+check(PopupLayout.tileColumns(forCount: 3) == 2, "three items: two columns")
+check(PopupLayout.tileColumns(forCount: 5) == 3, "five items: three columns")
+check(PopupLayout.tileColumns(forCount: 6) == 3, "six items: three columns")
+// Horizontal movement walks row-major order and wraps.
+check(PopupLayout.tileIndex(from: 0, deltaX: 1, deltaY: 0, count: 5) == 1, "tile right")
+check(PopupLayout.tileIndex(from: 2, deltaX: 1, deltaY: 0, count: 5) == 3, "tile right crosses rows")
+check(PopupLayout.tileIndex(from: 4, deltaX: 1, deltaY: 0, count: 5) == 0, "tile right wraps")
+check(PopupLayout.tileIndex(from: 0, deltaX: -1, deltaY: 0, count: 5) == 4, "tile left wraps")
+// Vertical movement steps a whole row and clamps at the ends.
+check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: 1, count: 5) == 3, "tile down row 0 -> row 1")
+check(PopupLayout.tileIndex(from: 1, deltaX: 0, deltaY: 1, count: 5) == 4, "tile down col 2")
+check(PopupLayout.tileIndex(from: 2, deltaX: 0, deltaY: 1, count: 5) == 4, "tile down clamps at the end")
+check(PopupLayout.tileIndex(from: 3, deltaX: 0, deltaY: -1, count: 5) == 0, "tile up row 1 -> row 0")
+check(PopupLayout.tileIndex(from: 4, deltaX: 0, deltaY: -1, count: 5) == 1, "tile up col 2")
+check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: -1, count: 5) == 0, "tile up clamps at the start")
+check(PopupLayout.tileIndex(from: 3, deltaX: 1, deltaY: 0, count: 2) == 0, "tile wraps in a one-column grid")
 
 print("LanguageToolEngine.authParams")
 let loneUser = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", apiKey: "")

@@ -12,13 +12,14 @@ final class ProofreadPopover {
 
     /// Shows `issue`'s fixes with `selected` highlighted, placed above `anchor` -- the word's rect in
     /// AppKit screen coordinates. `onHover`/`onAccept` receive the row index the mouse is on.
-    func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, fontSize: CGFloat,
-              onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
+    func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, layout: PopupLayout,
+              fontSize: CGFloat, onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
                                original: issue.original,
                                kind: issue.kind,
                                replacements: issue.replacements,
                                selected: selected,
+                               layout: layout,
                                position: position,
                                fontSize: fontSize,
                                onHover: onHover,
@@ -99,6 +100,7 @@ private struct PopoverView: View {
     let kind: IssueKind
     let replacements: [String]
     let selected: Int
+    let layout: PopupLayout
     /// e.g. "2 of 7"
     let position: String
     /// Base size for the fix rows; the header and hints sit a couple of points below it.
@@ -129,16 +131,8 @@ private struct PopoverView: View {
                     .padding(.horizontal, 5)
                     .padding(.bottom, 3)
             } else {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(replacements.enumerated()), id: \.offset) { index, word in
-                        row(word, isSelected: index == selected)
-                            .contentShape(Rectangle())
-                            .onTapGesture { onAccept(index) }
-                            // The guard avoids a hover -> re-render -> hover feedback loop.
-                            .onHover { inside in if inside && index != selected { onHover(index) } }
-                    }
-                }
-                .padding(.bottom, 2)
+                fixes
+                    .padding(.bottom, 2)
             }
         }
         .frame(minWidth: 150, maxWidth: 320, alignment: .leading)
@@ -148,16 +142,47 @@ private struct PopoverView: View {
         .fixedSize()
     }
 
+    /// The fixes in the chosen layout: full-width rows in a column, compact chips in a line, and a
+    /// two-row grid of chips in the tile (the grid math matches PopupLayout.tileIndex).
+    private var fixes: some View {
+        Group {
+            switch layout {
+            case .column:
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(replacementIndices, id: \.self) { index in
+                        fixRow(index)
+                    }
+                }
+            case .line:
+                HStack(spacing: 4) {
+                    ForEach(replacementIndices, id: \.self) { chip($0) }
+                }
+            case .tile:
+                let columns = PopupLayout.tileColumns(forCount: replacements.count)
+                let top = Array(replacementIndices.prefix(columns))
+                let bottom = Array(replacementIndices.dropFirst(columns))
+                VStack(spacing: 4) {
+                    HStack(spacing: 4) { ForEach(top, id: \.self) { chip($0) } }
+                    if !bottom.isEmpty {
+                        HStack(spacing: 4) { ForEach(bottom, id: \.self) { chip($0) } }
+                    }
+                }
+            }
+        }
+    }
+
+    private var replacementIndices: [Int] { Array(replacements.indices) }
+
     // Weight is constant so the popup does not resize as the selection moves. The selected row uses
     // the system selection colors (the same pill macOS menus use), which adapt to light and dark.
-    private func row(_ word: String, isSelected: Bool) -> some View {
+    private func fixRow(_ index: Int) -> some View {
         HStack(spacing: 6) {
-            Text(word)
+            Text(replacements[index])
                 .font(.system(size: fontSize))
-                .foregroundStyle(isSelected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
+                .foregroundStyle(index == selected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
                 .lineLimit(1)
             Spacer(minLength: 4)
-            if isSelected {
+            if index == selected {
                 Text("Return")
                     .font(.system(size: fontSize - 3))
                     .foregroundStyle(Color(nsColor: .selectedMenuItemTextColor).opacity(0.85))
@@ -166,8 +191,27 @@ private struct PopoverView: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
+        .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 5))
+        .contentShape(Rectangle())
+        .onTapGesture { onAccept(index) }
+        // The guard avoids a hover -> re-render -> hover feedback loop.
+        .onHover { inside in if inside && index != selected { onHover(index) } }
+    }
+
+    /// Compact cell for the line and tile layouts, same selection pill as the column rows.
+    private func chip(_ index: Int) -> some View {
+        Text(replacements[index])
+            .font(.system(size: fontSize))
+            .foregroundStyle(index == selected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+            .onTapGesture { onAccept(index) }
+            .onHover { inside in if inside && index != selected { onHover(index) } }
     }
 
     /// Matches the underline colors (LanguageTool palette: red spelling, yellow grammar,

@@ -11,6 +11,11 @@ struct ProofreadSettingsView: View {
             Section {
                 Stepper("Fixes shown per issue: \(appState.settings.proofreadMaxReplacements)",
                         value: $appState.settings.proofreadMaxReplacements, in: 1...10)
+                Picker("Fix list layout", selection: deferredWrite($appState.settings.proofreadLayout)) {
+                    ForEach(PopupLayout.allCases, id: \.self) { layout in
+                        Text(layout.displayName).tag(layout)
+                    }
+                }
                 LabeledContent {
                     Stepper("\(appState.settings.proofreadMinLength) characters",
                             value: $appState.settings.proofreadMinLength, in: 1...100)
