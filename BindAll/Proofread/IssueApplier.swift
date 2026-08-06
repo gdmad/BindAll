@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import os
 
 /// Applies a single fix to the focused field.
 @MainActor
@@ -14,22 +15,37 @@ enum IssueApplier {
         case failed(String)
     }
 
+    private static let log = Logger(subsystem: "com.evgeny.bindall", category: "issue-applier")
+
     /// Replaces `issue`'s range with `replacement`.
     ///
     /// The field is always re-read first: the user may have kept typing while the panel was open, and
     /// writing to a stale range would corrupt unrelated text.
+    ///
+    /// Some native apps (Reasonix among them) report `kAXSelectedText` as settable and claim the
+    /// write succeeded without changing anything. Path A's verify() catches that; instead of giving
+    /// up with `.stale`, the fix now falls through to the select-and-paste path, with a guard so a
+    /// write that did land asynchronously is never pasted a second time.
     static func apply(_ issue: TextIssue, replacement: String, element: AXUIElement, pid: pid_t,
                       restoreClipboard: Bool) async -> Result {
-        guard let text = ProofreadAX.currentText(of: element) else { return .failed("Cannot read the field.") }
-        guard let ourRange = IssueMerger.relocate(issue, in: text) else { return .stale }
+        guard let text = ProofreadAX.currentText(of: element) else {
+            log.error("cannot read the field")
+            return .failed("Cannot read the field.")
+        }
+        guard let ourRange = IssueMerger.relocate(issue, in: text) else {
+            log.debug("relocate failed: the issue's text is no longer at or near its range")
+            return .stale
+        }
         // Our offsets come from the field's value; the app's selection may be indexed differently
         // (Chromium's are), which is how a fix ends up on the neighbouring word. Ask the app what it
         // has at that range and shift until its own text agrees -- or refuse.
         guard let range = ProofreadAX.alignedRange(ourRange, expecting: issue.original, in: element,
                                                    contextBefore: issue.contextBefore,
                                                    contextAfter: issue.contextAfter) else {
+            log.debug("alignedRange found nothing matching near \(ourRange)")
             return .stale
         }
+        log.debug("relocated to \(ourRange), app-aligned to \(range)")
 
         // Path A: write straight into the selection. The caret stays put and the pasteboard is
         // untouched, so this is the path to prefer wherever the app allows it. Chromium is excluded:
@@ -39,32 +55,64 @@ enum IssueApplier {
            ProofreadAX.canSetSelectedText(element), ProofreadAX.select(range, in: element) {
             if AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString,
                                             replacement as CFString) == .success {
-                // The write claimed success. Never fall through to the paste path from here: if the
-                // app actually wrote the text, pasting would apply the fix twice.
-                return verify(element: element, at: range.location, equals: replacement)
-                    ? .applied(replacedRange: range)
-                    : .stale
+                if verify(element: element, at: range.location, equals: replacement) {
+                    log.debug("path A write verified")
+                    return .applied(replacedRange: range)
+                }
+                // The write claimed success but the text did not change. The write may still have
+                // landed asynchronously (the AX value lags the editor), so check for it; otherwise
+                // fall through to the paste path instead of returning stale.
+                if writeLanded(replacement: replacement, near: range.location, in: element) {
+                    log.debug("path A claimed success and the write landed asynchronously")
+                    return .applied(replacedRange: range)
+                }
+                log.debug("path A claimed success but did not land; falling through to the paste path")
             }
         }
 
         // Path B: Electron and Chromium fields usually accept a selection but refuse a text write.
         // Select the range and paste over it, which is the path the rest of the app already uses.
         guard ProofreadAX.select(range, in: element) else {
+            log.debug("select failed: the app does not accept selections")
             return .failed("This app does not support in-place fixes.")
+        }
+        // If Path A's write landed after all, the text at the range is the replacement now; pasting
+        // would apply the fix twice, so treat it as applied.
+        if let now = ProofreadAX.currentText(of: element) {
+            let ns = now as NSString
+            if NSMaxRange(range) <= ns.length, ns.substring(with: range) == replacement {
+                log.debug("the fix is already in the field; skipping the paste")
+                return .applied(replacedRange: range)
+            }
         }
         // select() returning success does not mean the selection took: Chromium updates its
         // accessibility cache straight away while the editor's real selection lands a moment later,
         // so pasting immediately can overwrite whatever was selected *before* -- the previous issue.
         // Wait for the selected text to actually read back as this issue's text before pasting.
         guard await selectionSettled(on: element, equals: issue.original, range: range) else {
+            log.debug("selection never settled on the issue's text")
             return .stale
         }
         // The paste itself is fire-and-forget (it lands ~0.05-0.3 s later); FocusTarget re-activates
         // the app first and waits longer when it was not frontmost.
+        log.debug("selection settled; pasting the fix")
         TextInjector.replaceSelection(with: replacement, restorePrevious: restoreClipboard,
                                       target: TextInjector.FocusTarget(
                                           app: NSRunningApplication(processIdentifier: pid)))
         return .applied(replacedRange: range)
+    }
+
+    /// Whether a write that claimed success actually replaced the word near `location`: re-reads the
+    /// field and looks for the replacement within a small window around the old position.
+    private static func writeLanded(replacement: String, near location: Int, in element: AXUIElement) -> Bool {
+        guard let text = ProofreadAX.currentText(of: element) else { return false }
+        let ns = text as NSString
+        let window = 32
+        let start = max(0, location - window)
+        let end = min(ns.length, location + (replacement as NSString).length + window)
+        guard start < end else { return false }
+        return ns.range(of: replacement, options: [.literal],
+                        range: NSRange(location: start, length: end - start)).location != NSNotFound
     }
 
     /// Waits (briefly) until the field reports `original` as its selected text, so the paste can
