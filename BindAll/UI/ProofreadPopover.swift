@@ -12,15 +12,13 @@ final class ProofreadPopover {
 
     /// Shows `issue`'s fixes with `selected` highlighted, placed above `anchor` -- the word's rect in
     /// AppKit screen coordinates. `onHover`/`onAccept` receive the row index the mouse is on.
-    func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, layout: PopupLayout,
-              fontSize: CGFloat, onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
+    func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, fontSize: CGFloat,
+              onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
-                               message: issue.message,
                                original: issue.original,
                                kind: issue.kind,
                                replacements: issue.replacements,
                                selected: selected,
-                               layout: layout,
                                position: position,
                                fontSize: fontSize,
                                onHover: onHover,
@@ -97,12 +95,10 @@ private final class FirstMouseHostingView: NSHostingView<AnyView> {
 
 private struct PopoverView: View {
     let title: String
-    let message: String
     let original: String
     let kind: IssueKind
     let replacements: [String]
     let selected: Int
-    let layout: PopupLayout
     /// e.g. "2 of 7"
     let position: String
     /// Base size for the fix rows; the header and hints sit a couple of points below it.
@@ -110,27 +106,40 @@ private struct PopoverView: View {
     let onHover: (Int) -> Void
     let onAccept: (Int) -> Void
 
-    /// Hovering the header swaps the short title for the full explanation.
-    @State private var showDetail = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            header
+            HStack(spacing: 5) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Text(title)
+                    .font(.system(size: fontSize - 2))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Text(position)
+                    .font(.system(size: fontSize - 3))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 5)
+            .padding(.top, 3)
 
             if replacements.isEmpty {
                 Text("No suggestions - Tab or arrows for the next word")
                     .font(.system(size: fontSize - 1))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 5)
+                    .padding(.bottom, 3)
             } else {
-                fixes
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(replacements.enumerated()), id: \.offset) { index, word in
+                        row(word, isSelected: index == selected)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onAccept(index) }
+                            // The guard avoids a hover -> re-render -> hover feedback loop.
+                            .onHover { inside in if inside && index != selected { onHover(index) } }
+                    }
+                }
+                .padding(.bottom, 2)
             }
-
-            Text(navHint)
-                .font(.system(size: fontSize - 3))
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 5)
-                .padding(.bottom, 3)
         }
         .frame(minWidth: 150, maxWidth: 320, alignment: .leading)
         .padding(2)
@@ -138,86 +147,15 @@ private struct PopoverView: View {
         .fixedSize()
     }
 
-    /// Kind dot + (short) title, the struck-through original next to the chosen fix, and the issue
-    /// position. Hovering shows the rule's full explanation.
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 6, height: 6)
-                Text(showDetail && !message.isEmpty ? message : title)
-                    .font(.system(size: fontSize - 2))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(showDetail ? 4 : 2)
-                Spacer(minLength: 8)
-                Text(position)
-                    .font(.system(size: fontSize - 3))
-                    .foregroundStyle(.tertiary)
-            }
-            if !original.isEmpty {
-                HStack(spacing: 5) {
-                    Text(original)
-                        .strikethrough()
-                        .lineLimit(1)
-                    if !replacements.isEmpty {
-                        Text("→")
-                        Text(replacements[selected])
-                            .fontWeight(.medium)
-                            .lineLimit(1)
-                    }
-                }
-                .font(.system(size: fontSize - 1))
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 5)
-        .padding(.top, 3)
-        .contentShape(Rectangle())
-        .onHover { inside in showDetail = inside }
-    }
-
-    /// The fixes in the chosen layout: full-width rows in a column, compact chips in a line, and a
-    /// two-row grid of chips in the tile (the grid math matches PopupLayout.tileIndex).
-    private var fixes: some View {
-        Group {
-            switch layout {
-            case .column:
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(replacementIndices, id: \.self) { row($0) }
-                }
-            case .line:
-                HStack(spacing: 4) {
-                    ForEach(replacementIndices, id: \.self) { chip($0) }
-                }
-            case .tile:
-                let columns = PopupLayout.tileColumns(forCount: replacements.count)
-                let top = Array(replacementIndices.prefix(columns))
-                let bottom = Array(replacementIndices.dropFirst(columns))
-                VStack(spacing: 4) {
-                    HStack(spacing: 4) { ForEach(top, id: \.self) { chip($0) } }
-                    if !bottom.isEmpty {
-                        HStack(spacing: 4) { ForEach(bottom, id: \.self) { chip($0) } }
-                    }
-                }
-            }
-        }
-        .padding(.bottom, 2)
-    }
-
-    private var replacementIndices: [Int] { Array(replacements.indices) }
-
     // Weight is constant so the popup does not resize as the selection moves.
-    private func row(_ index: Int) -> some View {
+    private func row(_ word: String, isSelected: Bool) -> some View {
         HStack(spacing: 6) {
-            Text("\(index + 1)")
-                .font(.system(size: fontSize - 2))
-                .foregroundStyle(.tertiary)
-                .frame(width: 10, alignment: .trailing)
-            Text(replacements[index])
+            Text(word)
                 .font(.system(size: fontSize))
-                .foregroundStyle(index == selected ? Color.accentColor : Color.primary)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
                 .lineLimit(1)
             Spacer(minLength: 4)
-            if index == selected {
+            if isSelected {
                 Text("Return")
                     .font(.system(size: fontSize - 3))
                     .foregroundStyle(.tertiary)
@@ -226,42 +164,8 @@ private struct PopoverView: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
+        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 4))
-        .contentShape(Rectangle())
-        .onTapGesture { onAccept(index) }
-        // The guard avoids a hover -> re-render -> hover feedback loop.
-        .onHover { inside in if inside && index != selected { onHover(index) } }
-    }
-
-    /// Compact numbered cell for the line and tile layouts.
-    private func chip(_ index: Int) -> some View {
-        HStack(spacing: 4) {
-            Text("\(index + 1)")
-                .font(.system(size: fontSize - 2))
-                .foregroundStyle(.tertiary)
-            Text(replacements[index])
-                .font(.system(size: fontSize))
-                .foregroundStyle(index == selected ? Color.accentColor : Color.primary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
-        .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 4))
-        .contentShape(Rectangle())
-        .onTapGesture { onAccept(index) }
-        .onHover { inside in if inside && index != selected { onHover(index) } }
-    }
-
-    private var navHint: String {
-        let choose: String
-        switch layout {
-        case .column: choose = "↑↓ choose"
-        case .line: choose = "←→ choose"
-        case .tile: choose = "Arrows choose"
-        }
-        return "\(choose) · 1-9 pick · Tab next · Esc close"
     }
 
     private var color: Color { Color(nsColor: kind.underlineColor) }

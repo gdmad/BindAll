@@ -7,11 +7,10 @@ final class AutocompleteOverlay {
     private var panel: NSPanel?
 
     /// Shows `items` (with `selected` highlighted) anchored so its top-left sits at `topLeft`
-    /// (AppKit screen coordinates, bottom-left origin). `layout` arranges them in a column, a single
-    /// line, or a two-row tile.
-    func show(_ items: [String], selected: Int, layout: PopupLayout, fontSize: CGFloat, topLeft: NSPoint) {
+    /// (AppKit screen coordinates, bottom-left origin). `horizontal` lays items in a line.
+    func show(_ items: [String], selected: Int, horizontal: Bool, fontSize: CGFloat, topLeft: NSPoint) {
         let host = NSHostingController(rootView: ListView(items: items, selected: selected,
-                                                          layout: layout, fontSize: fontSize))
+                                                          horizontal: horizontal, fontSize: fontSize))
         let panel = self.panel ?? makePanel()
         panel.contentViewController = host
         panel.layoutIfNeeded()
@@ -55,30 +54,18 @@ final class AutocompleteOverlay {
 private struct ListView: View {
     let items: [String]
     let selected: Int
-    let layout: PopupLayout
+    let horizontal: Bool
     let fontSize: CGFloat
 
     var body: some View {
         Group {
-            switch layout {
-            case .column:
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(itemIndices, id: \.self) { chip($0) }
-                }
-            case .line:
+            if horizontal {
                 HStack(spacing: 4) {
                     ForEach(itemIndices, id: \.self) { chip($0) }
                 }
-            case .tile:
-                // Two rows, filled left to right; the grid math matches PopupLayout.tileIndex.
-                let columns = PopupLayout.tileColumns(forCount: items.count)
-                let topRow = Array(items.indices.prefix(columns))
-                let bottomRow = Array(items.indices.dropFirst(columns))
-                VStack(spacing: 4) {
-                    HStack(spacing: 4) { ForEach(topRow, id: \.self) { chip($0) } }
-                    if !bottomRow.isEmpty {
-                        HStack(spacing: 4) { ForEach(bottomRow, id: \.self) { chip($0) } }
-                    }
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(itemIndices, id: \.self) { chip($0) }
                 }
             }
         }
@@ -98,7 +85,7 @@ private struct ListView: View {
             .lineLimit(1)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .frame(maxWidth: layout == .column ? .infinity : nil, alignment: .leading)
+            .frame(maxWidth: horizontal ? nil : .infinity, alignment: .leading)
             .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 4))
     }

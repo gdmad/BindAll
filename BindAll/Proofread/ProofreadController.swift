@@ -20,7 +20,6 @@ final class ProofreadController {
     struct Config {
         var enabled = false
         var maxReplacements = 3
-        var layout = PopupLayout.column
         var fontSize: CGFloat = 13
         var minLength = 12
         var restoreClipboard = false
@@ -276,7 +275,6 @@ final class ProofreadController {
         popover.show(issue: issue, selected: selectedReplacement,
                      position: "\(currentIndex + 1) of \(issues.count)",
                      anchor: anchor(for: issue),
-                     layout: config.layout,
                      fontSize: config.fontSize,
                      onHover: { [weak self] index in self?.hoverReplacement(index) },
                      onAccept: { [weak self] index in self?.acceptReplacement(index) })
@@ -302,35 +300,6 @@ final class ProofreadController {
         guard let count = issue?.replacements.count, count > 0 else { return }
         selectedReplacement = max(0, min(count - 1, selectedReplacement + delta))
         showCurrent(select: false)
-    }
-
-    /// Moves the fix selection inside the two-row tile grid.
-    private func moveGrid(dx: Int, dy: Int) {
-        guard let issue = issues[safe: currentIndex], issue.replacements.count > 0 else { return }
-        selectedReplacement = PopupLayout.tileIndex(from: selectedReplacement, deltaX: dx, deltaY: dy,
-                                                    count: issue.replacements.count)
-        showCurrent(select: false)
-    }
-
-    /// Routes an arrow key by layout. The column keeps fixes on the vertical axis and problem
-    /// stepping on the horizontal one; the line swaps them; the tile uses both axes for fixes (Tab
-    /// still steps between problems).
-    private func moveArrow(dx: Int, dy: Int) {
-        switch config.layout {
-        case .column:
-            if dx != 0 { step(dx) } else { move(dy) }
-        case .line:
-            if dy != 0 { step(dy) } else { move(dx) }
-        case .tile:
-            moveGrid(dx: dx, dy: dy)
-        }
-    }
-
-    /// Digits 1-9 apply the numbered fix directly, without moving the selection first.
-    private func acceptNumbered(_ index: Int) {
-        guard let issue = issues[safe: currentIndex], index < issue.replacements.count else { return }
-        selectedReplacement = index
-        accept()
     }
 
     /// Moves to another issue, wrapping around: with the popup open, Tab and the horizontal arrows
@@ -498,29 +467,18 @@ final class ProofreadController {
             return Unmanaged.passUnretained(event)
         }
 
-        // Digits 1-9 pick the numbered fix directly. The digit keycodes are not contiguous in the
-        // virtual-key table, so the mapping is written out (a range would swallow Minus and Equal).
-        let digitKeys: [Int: Int] = [
-            kVK_ANSI_1: 0, kVK_ANSI_2: 1, kVK_ANSI_3: 2, kVK_ANSI_4: 3, kVK_ANSI_5: 4,
-            kVK_ANSI_6: 5, kVK_ANSI_7: 6, kVK_ANSI_8: 7, kVK_ANSI_9: 8,
-        ]
-        if let digit = digitKeys[keyCode] {
-            DispatchQueue.main.async { [weak self] in self?.acceptNumbered(digit) }
-            return nil
-        }
-
         switch keyCode {
         case kVK_UpArrow:
-            DispatchQueue.main.async { [weak self] in self?.moveArrow(dx: 0, dy: -1) }
+            DispatchQueue.main.async { [weak self] in self?.move(-1) }
             return nil
         case kVK_DownArrow:
-            DispatchQueue.main.async { [weak self] in self?.moveArrow(dx: 0, dy: 1) }
+            DispatchQueue.main.async { [weak self] in self?.move(1) }
             return nil
         case kVK_LeftArrow:
-            DispatchQueue.main.async { [weak self] in self?.moveArrow(dx: -1, dy: 0) }
+            DispatchQueue.main.async { [weak self] in self?.step(-1) }
             return nil
         case kVK_RightArrow:
-            DispatchQueue.main.async { [weak self] in self?.moveArrow(dx: 1, dy: 0) }
+            DispatchQueue.main.async { [weak self] in self?.step(1) }
             return nil
         case kVK_Return, kVK_ANSI_KeypadEnter:
             DispatchQueue.main.async { [weak self] in self?.accept() }

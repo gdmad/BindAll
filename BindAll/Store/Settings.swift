@@ -125,40 +125,6 @@ enum LanguageToolMode: String, Codable, CaseIterable {
     }
 }
 
-// MARK: - Popup layout
-
-/// How the floating popups arrange their items. Shared by autocomplete suggestions and proofread
-/// fixes, so both feature the same three looks.
-enum PopupLayout: String, Codable, CaseIterable {
-    case column
-    case line
-    case tile
-
-    var displayName: String {
-        switch self {
-        case .column: return "Column"
-        case .line: return "Line"
-        case .tile: return "Tile (2 rows)"
-        }
-    }
-
-    /// Columns in tile mode: the grid is exactly two rows, filled left to right.
-    static func tileColumns(forCount count: Int) -> Int {
-        max(1, (count + 1) / 2)
-    }
-
-    /// Moves a selection by `deltaX`/`deltaY` steps inside a two-row tile grid of `count` items.
-    /// Horizontal movement walks the row-major order and wraps; vertical movement steps a whole row
-    /// (columns) and clamps at the ends.
-    static func tileIndex(from index: Int, deltaX: Int, deltaY: Int, count: Int) -> Int {
-        guard count > 0 else { return 0 }
-        let clamped = max(0, min(index, count - 1))
-        if deltaX != 0 { return (clamped + deltaX + count) % count }
-        if deltaY != 0 { return max(0, min(count - 1, clamped + deltaY * tileColumns(forCount: count))) }
-        return clamped
-    }
-}
-
 // MARK: - Root settings
 
 struct Settings: Codable, Equatable {
@@ -181,7 +147,7 @@ struct Settings: Codable, Equatable {
     var autocompleteEnabled: Bool = false
     var autocompleteCount: Int = 5            // how many suggestions to show (1...9)
     var popupFontSize: Int = 13               // text size in both popups: autocomplete and proofread (10...20)
-    var autocompleteLayout: PopupLayout = .column  // how the suggestions are arranged
+    var autocompleteHorizontal: Bool = false  // false = column (Up/Down), true = line (Left/Right)
     var autocompleteLanguages: [String] = []  // dictionary languages (BCP-47); empty = auto-detect
     var autocompleteLearn: Bool = true        // learn accepted/typed words and rank them
     var autocompleteNextWord: Bool = true     // predict the next word after a space
@@ -194,7 +160,6 @@ struct Settings: Codable, Equatable {
     // from the Correct settings below: it is the same action, reworked to step through the issues
     // instead of applying them all blindly.
     var proofreadMaxReplacements: Int = 3      // fixes listed per issue (1...10)
-    var proofreadLayout: PopupLayout = .column // how the fixes are arranged in the popup
     var proofreadMinLength: Int = 12           // shortest text worth checking
     var proofreadAppMode: String = "all"       // "all" | "allow" | "deny"
     var proofreadApps: [String] = []           // bundle identifiers for allow/deny
@@ -257,10 +222,10 @@ struct Settings: Codable, Equatable {
 extension Settings {
     enum CodingKeys: String, CodingKey {
         case enabled, defaultEngine, separator, defaultPrompt, actionKeys,
-             restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteLayout,
+             restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteHorizontal,
              popupFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
              autocompleteAcceptReturn, autocompleteContextRanking, autocompleteAppMode, autocompleteApps,
-             proofreadMaxReplacements, proofreadLayout,
+             proofreadMaxReplacements,
              proofreadMinLength, proofreadAppMode, proofreadApps,
              historyEnabled, sourceLanguage, targetLanguage,
              correctEnabled, languageToolMode, languageToolBaseURL, languageToolUsername, languageToolLanguage,
@@ -271,7 +236,6 @@ extension Settings {
     /// Old key names still honoured on decode (never written back).
     private enum LegacyKeys: String, CodingKey {
         case autocompleteFontSize
-        case autocompleteHorizontal
     }
 
     init(from decoder: Decoder) throws {
@@ -286,12 +250,7 @@ extension Settings {
         if let v = try c.decodeIfPresent(Bool.self, forKey: .maskAISlop) { maskAISlop = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteEnabled) { autocompleteEnabled = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteCount) { autocompleteCount = v }
-        if let v = try c.decodeIfPresent(PopupLayout.self, forKey: .autocompleteLayout) {
-            autocompleteLayout = v
-        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
-                  let v = try legacy.decodeIfPresent(Bool.self, forKey: .autocompleteHorizontal) {
-            autocompleteLayout = v ? .line : .column
-        }
+        if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteHorizontal) { autocompleteHorizontal = v }
         // autocompleteFontSize is the legacy name of popupFontSize (it now drives both popups).
         if let v = try c.decodeIfPresent(Int.self, forKey: .popupFontSize) {
             popupFontSize = v
@@ -308,7 +267,6 @@ extension Settings {
         if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteApps) { autocompleteApps = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMaxReplacements) { proofreadMaxReplacements = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMaxReplacements) { proofreadMaxReplacements = v }
-        if let v = try c.decodeIfPresent(PopupLayout.self, forKey: .proofreadLayout) { proofreadLayout = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMinLength) { proofreadMinLength = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .proofreadAppMode) { proofreadAppMode = v }
         if let v = try c.decodeIfPresent([String].self, forKey: .proofreadApps) { proofreadApps = v }
