@@ -34,6 +34,19 @@ struct ClearFocusOnAppear: ViewModifier {
     }
 }
 
+/// Wraps a binding so writes land one runloop tick later. Text fields commit their text when they
+/// lose focus, and during a settings tab switch that happens inside the view update — writing a
+/// @Published-backed binding there logs "Publishing changes from within view updates". Use for any
+/// TextField/TextEditor bound to `appState.settings`.
+///
+/// **Text fields only.** A Picker writes from a user action, not from a view update, so it needs no
+/// deferral -- and it re-reads its selection immediately, sees the value it just set still missing,
+/// and snaps back to the old one, which is how the layout pickers were losing every choice.
+func deferredWrite<T>(_ source: Binding<T>) -> Binding<T> {
+    Binding(get: { source.wrappedValue },
+            set: { value in DispatchQueue.main.async { source.wrappedValue = value } })
+}
+
 extension View {
     /// Neutral dark box for a text field/editor (use with .textFieldStyle(.plain) and labelsHidden).
     func darkField() -> some View { modifier(DarkFieldStyle()) }

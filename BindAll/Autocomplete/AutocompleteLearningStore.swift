@@ -41,12 +41,22 @@ final class AutocompleteLearningStore {
     }
 
     private var model = Model()
-    /// Bundled seed bigrams (Russian only) used as a final next-word backoff. Read-only.
+    /// Bundled seed bigrams (Russian only, Leipzig news corpus) -- the same table serves both the
+    /// final next-word backoff and the context-score level for current-word completion ranking.
+    /// A separate Google Books corpus served next-word until it was measured against this one and
+    /// dropped: Leipzig already covers 89% of its keys, is 11x wider, and reads as more current
+    /// ("я" -> "думаю"/"считаю" rather than "и"/"уже"). One file, loaded once. Read-only.
     private var seedBigrams: [String: [String: Int]] = [:]
+    /// Bundled seed trigrams (Russian only, Leipzig news corpus), keyed by `trigramKey(prev2, prev1)`,
+    /// used as a stronger context-score level than the seed bigrams. Read-only.
+    private var seedTrigrams: [String: [String: Int]] = [:]
     private let fileURL: URL
-    private let maxWords = 5000
+    /// Pending debounced save; guarded by `lock`.
+    private var saveDebounce: DispatchWorkItem?
 
-    init(fileURL: URL? = nil) {
+    private static let log = Logger(subsystem: "com.evgeny.bindall", category: "autocomplete")
+
+    init(fileURL: URL? = nil, seedURL: URL? = nil, trigramSeedURL: URL? = nil) {
         if let fileURL {
             self.fileURL = fileURL
         } else {
@@ -56,20 +66,46 @@ final class AutocompleteLearningStore {
             self.fileURL = dir.appendingPathComponent("autocomplete.json")
         }
         load()
-        loadSeed()
+        // Explicit URLs override the bundle lookups so tests/CLI can point at the same data files.
+        // Silent by design elsewhere in this class, but a seed failing to load is otherwise
+        // indistinguishable from "the feature just doesn't work" -- log the outcome either way.
+        if let url = seedURL ?? Bundle.main.url(forResource: "ru_bigrams_ctx", withExtension: "txt") {
+            seedBigrams = Self.loadBigrams(from: url)
+            Self.log.info("loaded \(self.seedBigrams.count) bigram seed keys from \(url.lastPathComponent)")
+        } else {
+            Self.log.warning("ru_bigrams_ctx.txt not found in the bundle; next-word and context ranking lose their seed")
+        }
+        if let url = trigramSeedURL ?? Bundle.main.url(forResource: "ru_trigrams", withExtension: "txt") {
+            seedTrigrams = Self.loadTrigrams(from: url)
+            Self.log.info("loaded \(self.seedTrigrams.count) trigram seed keys from \(url.lastPathComponent)")
+        } else {
+            Self.log.warning("ru_trigrams.txt not found in the bundle; context ranking loses its trigram seed")
+        }
     }
 
-    /// Loads the bundled Russian bigram seed (tab-separated: prev, next, freq). Missing file is fine.
-    private func loadSeed() {
-        guard let url = Bundle.main.url(forResource: "ru_bigrams", withExtension: "txt"),
-              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+    /// Parses a bigram seed file (tab-separated: prev, next, count). Missing/empty is fine.
+    private static func loadBigrams(from url: URL) -> [String: [String: Int]] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
         var seed: [String: [String: Int]] = [:]
         for line in text.split(separator: "\n") {
             let cols = line.split(separator: "\t")
             guard cols.count >= 3, let freq = Int(cols[2]) else { continue }
             seed[String(cols[0]), default: [:]][String(cols[1])] = freq
         }
-        seedBigrams = seed
+        return seed
+    }
+
+    /// Parses a trigram seed file (tab-separated: prev2, prev1, next, count), keyed with the same
+    /// `trigramKey` the learned model uses. Missing/empty is fine.
+    private static func loadTrigrams(from url: URL) -> [String: [String: Int]] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+        var seed: [String: [String: Int]] = [:]
+        for line in text.split(separator: "\n") {
+            let cols = line.split(separator: "\t")
+            guard cols.count >= 4, let freq = Int(cols[3]) else { continue }
+            seed[Self.trigramKey(String(cols[0]), String(cols[1])), default: [:]][String(cols[2])] = freq
+        }
+        return seed
     }
 
     var wordCount: Int { withLock { model.wordCounts.count } }
@@ -80,7 +116,7 @@ final class AutocompleteLearningStore {
     func record(word: String, prev1: String?, prev2: String?) {
         let w = word.lowercased()
         guard w.count >= 2, w.allSatisfy({ $0.isLetter }) else { return }
-        let snapshot = withLock { () -> Model in
+        withLock {
             model.wordCounts[w, default: 0] += 1
             if let p1 = prev1, !p1.isEmpty {
                 model.bigrams[p1.lowercased(), default: [:]][w, default: 0] += 1
@@ -88,10 +124,10 @@ final class AutocompleteLearningStore {
                     model.trigrams[Self.trigramKey(p2, p1), default: [:]][w, default: 0] += 1
                 }
             }
-            pruneLocked()
-            return model
         }
-        persist(snapshot)
+        // The vocabulary is unbounded, so the file grows with use; a debounced save keeps a fast
+        // typist from re-encoding the whole model on every single word.
+        persistSoon()
     }
 
     /// Words typed/accepted fewer than this many times haven't been confirmed as real words yet
@@ -138,6 +174,58 @@ final class AutocompleteLearningStore {
         }
     }
 
+    /// Context-aware score for ranking *current-word completions*: how likely is `word` to follow
+    /// `prev1`/`prev2` (up to two preceding words). Interpolated evidence with the same precedence as
+    /// `nextWords()` (learned trigram > learned bigram > seed trigram > seed bigram > personal
+    /// frequency), each level normalized to its context maximum so counts of different scales (seed
+    /// corpora vs personal typing) stay comparable. Non-negative; 0 means no evidence. Read-only.
+    func contextScore(word: String, prev1: String?, prev2: String?) -> Double {
+        let w = word.lowercased()
+        return withLock {
+            var score = 0.0
+
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let p2 = prev2?.lowercased(), !p2.isEmpty,
+               let following = model.trigrams[Self.trigramKey(p2, p1)], let c = following[w] {
+                score += 1000.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let following = model.bigrams[p1], let c = following[w] {
+                score += 100.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let p2 = prev2?.lowercased(), !p2.isEmpty,
+               let following = seedTrigrams[Self.trigramKey(p2, p1)], let c = following[w] {
+                score += 30.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let p1 = prev1?.lowercased(), !p1.isEmpty,
+               let following = seedBigrams[p1], let c = following[w] {
+                score += 10.0 * relative(c, to: following.values.max() ?? c)
+            }
+            if let c = model.wordCounts[w] {
+                score += 1.0 * relative(c, to: model.wordCounts.values.max() ?? c)
+            }
+            return score
+        }
+    }
+
+    /// Normalized personal-frequency prior for `word` (0...1 against the most-used learned word).
+    /// 0 when the word was never learned. Used by the semantic variant to keep learned vocabulary
+    /// ahead of dictionary words that are merely semantically close.
+    func frequencyScore(word: String) -> Double {
+        let w = word.lowercased()
+        return withLock {
+            guard let c = model.wordCounts[w] else { return 0 }
+            return relative(c, to: model.wordCounts.values.max() ?? c)
+        }
+    }
+
+    /// Normalizes `count` to the 0...1 range against `max` of its context distribution.
+    private func relative(_ count: Int, to max: Int) -> Double {
+        guard max > 0 else { return 0 }
+        return Double(count) / Double(max)
+    }
+
     /// All learned words, most-used first (for the management UI).
     func entries() -> [(word: String, count: Int)] {
         withLock { model.wordCounts.sorted { $0.value > $1.value }.map { ($0.key, $0.value) } }
@@ -177,59 +265,47 @@ final class AutocompleteLearningStore {
 
     // MARK: - Persistence
 
-    /// Caps the learned-word map. Caller must already hold `lock`.
-    private func pruneLocked() {
-        guard model.wordCounts.count > maxWords else { return }
-        let kept = model.wordCounts.sorted { $0.value > $1.value }.prefix(maxWords)
-        model.wordCounts = Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value) })
-    }
-
     private func load() {
         guard let data = try? Data(contentsOf: fileURL),
               let decoded = try? JSONDecoder().decode(Model.self, from: data) else { return }
         model = decoded
-        normalizeCase()
-    }
-
-    /// One-time cleanup of pre-existing data: lowercase non-pinned learned words and all n-gram "next"
-    /// values so case variants merge. Pinned custom words (count >= 1_000_000) keep their case.
-    private func normalizeCase() {
-        func lowerNextValues(_ dict: [String: [String: Int]]) -> (result: [String: [String: Int]], changed: Bool) {
-            var out: [String: [String: Int]] = [:]
-            var changed = false
-            for (key, inner) in dict {
-                var merged: [String: Int] = [:]
-                for (word, count) in inner {
-                    let lw = word.lowercased()
-                    if lw != word { changed = true }
-                    merged[lw, default: 0] += count
-                }
-                out[key] = merged
-            }
-            return (out, changed)
-        }
-
-        var changed = false
-        var counts: [String: Int] = [:]
-        for (word, count) in model.wordCounts {
-            let key = count >= 1_000_000 ? word : word.lowercased()
-            if key != word { changed = true }
-            counts[key, default: 0] += count
-        }
-        model.wordCounts = counts
-
-        let (bg, bgChanged) = lowerNextValues(model.bigrams)
-        model.bigrams = bg
-        let (tg, tgChanged) = lowerNextValues(model.trigrams)
-        model.trigrams = tg
-
-        if changed || bgChanged || tgChanged { persist(model) }
     }
 
     /// Encodes `snapshot` and writes it atomically off the caller's thread, so learning a word never
     /// blocks typing on disk I/O. Writes are serialized on `ioQueue`.
     private func persist(_ snapshot: Model) {
         ioQueue.async { [fileURL] in
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    /// Schedules a save ~2 s out, coalescing with any save already pending.
+    private func persistSoon() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let snapshot = self.withLock { self.model }
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: self.fileURL, options: .atomic)
+        }
+        withLock {
+            saveDebounce?.cancel()
+            saveDebounce = work
+        }
+        ioQueue.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    /// Writes any pending debounced state synchronously. Call on app termination so the last few
+    /// learned words are not lost.
+    func flush() {
+        let pending = withLock { () -> DispatchWorkItem? in
+            defer { saveDebounce = nil }
+            return saveDebounce
+        }
+        guard pending != nil else { return }
+        pending?.cancel()
+        let snapshot = withLock { model }
+        ioQueue.sync { [fileURL] in
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
             try? data.write(to: fileURL, options: .atomic)
         }

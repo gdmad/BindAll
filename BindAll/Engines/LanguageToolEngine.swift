@@ -1,9 +1,22 @@
 import Foundation
 
+/// One `matches` entry from a LanguageTool `/check` response. `offset` and `length` are UTF-16 code
+/// units (LanguageTool reports Java char indices).
+struct LTMatch: Equatable {
+    var offset: Int
+    var length: Int
+    var message: String
+    var shortMessage: String
+    var replacements: [String]
+    var ruleId: String?
+    var issueType: String?
+    var categoryId: String?
+}
+
 /// Grammar and spelling correction via a LanguageTool server (the public API, a self-hosted server,
 /// or LanguageTool Premium). Unlike the AI engines, this does not follow instructions: it only
 /// corrects the text, so it powers the dedicated "Correct" action rather than the engine dropdown.
-struct LanguageToolEngine {
+struct LanguageToolEngine: Equatable {
     /// Base URL including the API version, e.g. `https://api.languagetool.org/v2`.
     let baseURL: String
     /// Account email (Premium only; ignored by the free/self-hosted servers).
@@ -15,11 +28,25 @@ struct LanguageToolEngine {
 
     /// Corrects `text` and returns the result with all suggested replacements applied.
     func correct(_ text: String) async throws -> String {
+        let matches = try await rawMatches(text, languageOverride: nil)
+        return Self.applyMatches(matches, to: text)
+    }
+
+    /// Checks `text` and returns the matches in structured form, for the proofreading pipeline which
+    /// shows them individually instead of applying them all.
+    func check(_ text: String, languageOverride: String? = nil) async throws -> [LTMatch] {
+        let matches = try await rawMatches(text, languageOverride: languageOverride)
+        return Self.parseMatches(matches)
+    }
+
+    /// One `/check` request, returning the raw `matches` array.
+    private func rawMatches(_ text: String, languageOverride: String?) async throws -> [[String: Any]] {
         let url = try endpoint("/check")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        req.httpBody = formBody(["text": text, "language": language.isEmpty ? "auto" : language])
+        let lang = (languageOverride ?? language).trimmingCharacters(in: .whitespaces)
+        req.httpBody = formBody(["text": text, "language": lang.isEmpty ? "auto" : lang])
 
         let (data, response) = try await URLSession.shared.data(for: req)
         try Self.validate(response: response, data: data)
@@ -28,7 +55,7 @@ struct LanguageToolEngine {
               let matches = json["matches"] as? [[String: Any]] else {
             throw EngineError.emptyResponse
         }
-        return Self.applyMatches(matches, to: text)
+        return matches
     }
 
     /// Lightweight connectivity check against the server's language list.
@@ -42,6 +69,82 @@ struct LanguageToolEngine {
             return "Connected — \(arr.count) languages"
         }
         return "Connected"
+    }
+
+    // MARK: - Structured matches
+
+    /// Parses a whole `/check` response body. Split out from the networking so it can be tested
+    /// against recorded responses without a server.
+    static func parseMatches(_ data: Data) throws -> [LTMatch] {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let matches = json["matches"] as? [[String: Any]] else {
+            throw EngineError.emptyResponse
+        }
+        return parseMatches(matches)
+    }
+
+    static func parseMatches(_ matches: [[String: Any]]) -> [LTMatch] {
+        matches.compactMap { m in
+            guard let offset = m["offset"] as? Int, let length = m["length"] as? Int,
+                  offset >= 0, length > 0 else { return nil }
+            let rule = m["rule"] as? [String: Any]
+            let category = rule?["category"] as? [String: Any]
+            return LTMatch(
+                offset: offset,
+                length: length,
+                message: m["message"] as? String ?? "",
+                shortMessage: m["shortMessage"] as? String ?? "",
+                replacements: (m["replacements"] as? [[String: Any]] ?? []).compactMap { $0["value"] as? String },
+                ruleId: rule?["id"] as? String,
+                issueType: rule?["issueType"] as? String,
+                categoryId: category?["id"] as? String
+            )
+        }
+    }
+
+    /// Maps matches onto the shared issue model. Matches whose range falls outside `text` are dropped
+    /// rather than trusted: a bad offset would make the applier edit the wrong characters.
+    static func issues(from matches: [LTMatch], text: String) -> [TextIssue] {
+        let ns = text as NSString
+        return matches.compactMap { m in
+            let range = NSRange(location: m.offset, length: m.length)
+            guard NSMaxRange(range) <= ns.length else { return nil }
+            let short = m.shortMessage.isEmpty ? m.message : m.shortMessage
+            let beforeStart = max(0, range.location - TextIssue.contextSpan)
+            let afterEnd = min(ns.length, NSMaxRange(range) + TextIssue.contextSpan)
+            return TextIssue(
+                range: range,
+                kind: kind(for: m),
+                shortMessage: short,
+                message: m.message,
+                replacements: m.replacements,
+                ruleId: m.ruleId,
+                source: .languageTool,
+                original: ns.substring(with: range),
+                contextBefore: ns.substring(with: NSRange(location: beforeStart,
+                                                          length: range.location - beforeStart)),
+                contextAfter: ns.substring(with: NSRange(location: NSMaxRange(range),
+                                                         length: afterEnd - NSMaxRange(range)))
+            )
+        }
+    }
+
+    /// LanguageTool's `issueType` follows the LanguageTool/LibreOffice vocabulary; `category.id` is
+    /// needed too, because "typographical" covers both typos and punctuation depending on category.
+    static func kind(for m: LTMatch) -> IssueKind {
+        if m.categoryId == "TYPOS" { return .spelling }
+        switch m.issueType {
+        case "misspelling", "typos":
+            return .spelling
+        case "grammar", "inconsistency", "duplication", "agreement":
+            return .grammar
+        case "whitespace", "typographical", "punctuation":
+            return .punctuation
+        case "style", "register", "locale-violation", "redundancy", "wordiness":
+            return .style
+        default:
+            return .grammar
+        }
     }
 
     // MARK: - Match application
@@ -84,13 +187,23 @@ struct LanguageToolEngine {
     }
 
     private func formBody(_ params: [String: String]) -> Data {
-        var all = params
-        if !username.isEmpty { all["username"] = username }
-        if !apiKey.isEmpty { all["apiKey"] = apiKey }
+        let all = Self.authParams(params, username: username, apiKey: apiKey)
         let encoded = all.map { key, value in
             "\(Self.formEncode(key))=\(Self.formEncode(value))"
         }.joined(separator: "&")
         return Data(encoded.utf8)
+    }
+
+    /// Adds credentials to the request only when both are present. LanguageTool rejects a lone
+    /// username or apiKey with HTTP 400 ("you need to specify both"), so a half-filled pair must fall
+    /// back to an anonymous request rather than a broken one.
+    static func authParams(_ params: [String: String], username: String, apiKey: String) -> [String: String] {
+        var all = params
+        if !username.isEmpty, !apiKey.isEmpty {
+            all["username"] = username
+            all["apiKey"] = apiKey
+        }
+        return all
     }
 
     private static let formAllowed: CharacterSet = {

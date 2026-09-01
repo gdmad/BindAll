@@ -3,20 +3,22 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
 
+    /// Every feature owns one tab, and that tab carries everything about it -- starting with its own
+    /// on/off switch. General is left with what belongs to the app as a whole.
     var body: some View {
         TabView {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
             ActionsSettingsView()
                 .tabItem { Label("Actions", systemImage: "text.badge.checkmark") }
-            ProvidersSettingsView()
-                .tabItem { Label("Providers", systemImage: "cloud") }
             TranslationSettingsView()
                 .tabItem { Label("Translation", systemImage: "globe") }
-            HotkeysSettingsView()
-                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
             AutocompleteSettingsView()
                 .tabItem { Label("Autocomplete", systemImage: "text.append") }
+            ProofreadSettingsView()
+                .tabItem { Label("Proofread", systemImage: "text.magnifyingglass") }
+            ProvidersSettingsView()
+                .tabItem { Label("Providers", systemImage: "cloud") }
         }
         .padding(.top, 8)
         .frame(minWidth: 520, idealWidth: 560, minHeight: 478, idealHeight: 558)
@@ -63,37 +65,16 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Startup") {
+            Section {
+                Toggle(isOn: $appState.settings.enabled) {
+                    helpHeader("BindAll enabled", "The master switch, the same one the menu bar carries. Off: the global shortcuts, autocomplete and proofreading all stand down until it is back on.")
+                }
                 Toggle("Launch at login", isOn: Binding(
                     get: { LoginItemManager.isEnabled },
                     set: { LoginItemManager.apply($0) }
                 ))
-            }
-
-            Section {
-                Picker("Engine for text actions", selection: $appState.settings.defaultEngine) {
-                    ForEach(ProviderKind.allCases) { kind in
-                        Text(kind.displayName).tag(kind)
-                    }
-                }
             } header: {
-                helpHeader("Engine", "Used for the default action and custom prompts. Translation always runs on-device via Apple's Translation framework.")
-            }
-
-            Section {
-                Toggle(isOn: $appState.settings.correctEnabled) {
-                    helpHeader("Enable Correct", "Adds a separate shortcut that fixes grammar and spelling in the selection with a LanguageTool server. Set its shortcut in Shortcuts and the server in Providers. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
-                }
-            } header: {
-                Text("Correct (LanguageTool)")
-            }
-
-            Section {
-                Toggle(isOn: $appState.settings.autocompleteEnabled) {
-                    helpHeader("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Configure it on the Autocomplete tab. Works in most apps; skipped in password fields.")
-                }
-            } header: {
-                Text("Autocomplete")
+                Text("Startup")
             }
 
             Section("Output") {
@@ -106,6 +87,13 @@ struct GeneralSettingsView: View {
                 Toggle(isOn: $appState.settings.historyEnabled) {
                     helpHeader("Keep history", "Stores the last 50 results locally (menu bar > History) so a closed popup or overwritten paste can be recovered. Stored on this Mac only; never includes API keys.")
                 }
+            }
+
+            Section {
+                Stepper("Text size: \(appState.settings.popupFontSize) pt",
+                        value: $appState.settings.popupFontSize, in: 10...20)
+            } header: {
+                helpHeader("Popups", "The floating popups: autocomplete suggestions and proofread fixes. Both use this text size.")
             }
 
             Section {
@@ -140,8 +128,10 @@ struct ActionsSettingsView: View {
 
     var body: some View {
         Form {
+            ShortcutsSection()
+
             Section {
-                TextEditor(text: $appState.settings.defaultPrompt)
+                TextEditor(text: deferredWrite($appState.settings.defaultPrompt))
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .frame(height: 90)
@@ -156,7 +146,7 @@ struct ActionsSettingsView: View {
 
             Section {
                 LabeledContent("Separator") {
-                    TextField("", text: $appState.settings.separator)
+                    TextField("", text: deferredWrite($appState.settings.separator))
                         .labelsHidden()
                         .textFieldStyle(.plain)
                         .darkField()
@@ -179,32 +169,39 @@ struct ActionsSettingsView: View {
 // MARK: - Translation
 
 struct TranslationSettingsView: View {
+    var body: some View {
+        Form {
+            TranslationSection()
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Translation options: the language pair and whether it works offline.
+struct TranslationSection: View {
     @EnvironmentObject var appState: AppState
 
     /// Offline status of the currently selected pair: nil = unknown (Auto source).
     @State private var pairInstalled: Bool?
 
     var body: some View {
-        Form {
-            Section {
-                HStack(spacing: 8) {
-                    Text("Source").foregroundStyle(.secondary)
-                    languagePicker(selection: $appState.settings.sourceLanguage, includeAuto: true)
+        Section {
+            HStack(spacing: 8) {
+                Text("Source").foregroundStyle(.secondary)
+                languagePicker(selection: $appState.settings.sourceLanguage, includeAuto: true)
 
-                    Button { swap() } label: { Image(systemName: "arrow.left.arrow.right") }
-                        .buttonStyle(.borderless)
-                        .disabled(appState.settings.sourceLanguage == AppLanguages.autoTag)
-                        .help("Swap source and target")
+                Button { swap() } label: { Image(systemName: "arrow.left.arrow.right") }
+                    .buttonStyle(.borderless)
+                    .disabled(appState.settings.sourceLanguage == AppLanguages.autoTag)
+                    .help("Swap source and target")
 
-                    Text("Target").foregroundStyle(.secondary)
-                    languagePicker(selection: $appState.settings.targetLanguage, includeAuto: false)
-                }
-                statusRow
-            } header: {
-                helpHeader("Translation", "Source may be Auto Detect or a fixed language. With an explicit source, the pair is bidirectional (text is translated into whichever of source/target it is not). Runs on-device via Apple's Translation framework.")
+                Text("Target").foregroundStyle(.secondary)
+                languagePicker(selection: $appState.settings.targetLanguage, includeAuto: false)
             }
+            statusRow
+        } header: {
+            helpHeader("Translation", "Source may be Auto Detect or a fixed language. With an explicit source, the pair is bidirectional (text is translated into whichever of source/target it is not). Runs on-device via Apple's Translation framework.")
         }
-        .formStyle(.grouped)
         .task(id: refreshKey) { await refreshStatus() }
     }
 
@@ -268,43 +265,34 @@ struct TranslationSettingsView: View {
     }
 }
 
-// MARK: - Hotkeys
+// MARK: - Shortcuts
 
-struct HotkeysSettingsView: View {
+/// Global shortcut recorders, hosted as a section inside the Actions tab's Form.
+struct ShortcutsSection: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
         let s = appState.settings
         let keyShortcuts = s.actionKeys.compactMap(\.hotkey)
-        let correct: [HotkeyConfig] = s.correctEnabled ? [s.correctHotkey] : []
-        Form {
-            Section {
-                LabeledContent("Default action") {
-                    ShortcutRecorder(config: $appState.settings.defaultActionHotkey,
-                                     others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
-                }
-                LabeledContent("Translate selection") {
-                    ShortcutRecorder(config: $appState.settings.translateHotkey,
-                                     others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
-                }
-                LabeledContent("Translate from screen (OCR)") {
-                    ShortcutRecorder(config: $appState.settings.screenTranslateHotkey,
-                                     others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + correct + keyShortcuts)
-                }
-                LabeledContent("Quick Translate") {
-                    ShortcutRecorder(config: $appState.settings.quickTranslateHotkey,
-                                     others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + correct + keyShortcuts)
-                }
-                if s.correctEnabled {
-                    LabeledContent("Correct (LanguageTool)") {
-                        ShortcutRecorder(config: $appState.settings.correctHotkey,
-                                         others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
-                    }
-                }
-            } header: {
-                helpHeader("Shortcut", "Click a field and press the keys. Press the same combo several times for a repeat trigger (shown as e.g. Cmd+C+C). The default Cmd+C also copies, so the selection is captured automatically.")
+        Section {
+            LabeledContent("Default action") {
+                ShortcutRecorder(config: $appState.settings.defaultActionHotkey,
+                                 others: [s.translateHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
             }
+            LabeledContent("Translate selection") {
+                ShortcutRecorder(config: $appState.settings.translateHotkey,
+                                 others: [s.defaultActionHotkey, s.screenTranslateHotkey, s.quickTranslateHotkey] + keyShortcuts)
+            }
+            LabeledContent("Translate from screen (OCR)") {
+                ShortcutRecorder(config: $appState.settings.screenTranslateHotkey,
+                                 others: [s.defaultActionHotkey, s.translateHotkey, s.quickTranslateHotkey] + keyShortcuts)
+            }
+            LabeledContent("Quick Translate") {
+                ShortcutRecorder(config: $appState.settings.quickTranslateHotkey,
+                                 others: [s.defaultActionHotkey, s.translateHotkey, s.screenTranslateHotkey] + keyShortcuts)
+            }
+        } header: {
+            helpHeader("Shortcuts", "Click a field and press the keys. Press the same combo several times for a repeat trigger (shown as e.g. Cmd+C+C). The default Cmd+C also copies, so the selection is captured automatically.")
         }
-        .formStyle(.grouped)
     }
 }

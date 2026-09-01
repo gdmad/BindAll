@@ -3,20 +3,31 @@ import SwiftUI
 
 /// A tiny, non-activating floating list of completion candidates near the caret. It never becomes the
 /// key window, so it does not steal focus from the text field being typed into.
+///
+/// The chrome, the cells and the placement come from `PopupKit`, shared with the proofread popup.
 final class AutocompleteOverlay {
     private var panel: NSPanel?
+    /// How many items the last tile presentation put on its first row (0 = not a tile / even split).
+    /// The controller reads this so vertical arrow navigation jumps by the real column count.
+    private(set) var lastTileTopCount = 0
 
-    /// Shows `items` (with `selected` highlighted) anchored so its top-left sits at `topLeft`
-    /// (AppKit screen coordinates, bottom-left origin). `horizontal` lays items in a line.
-    func show(_ items: [String], selected: Int, horizontal: Bool, fontSize: CGFloat, topLeft: NSPoint) {
+    /// Shows `items` (with `selected` highlighted) anchored to `anchor` (the caret's rect in AppKit
+    /// screen coordinates, bottom-left origin). `layout` arranges them in a column, a single line, or
+    /// a two-row tile. Normally hangs below `anchor`; rises above it instead when the field sits too
+    /// low on screen for the list to fit underneath.
+    func show(_ items: [String], selected: Int, layout: PopupLayout, fontSize: CGFloat, anchor: CGRect) {
+        let topCount = layout == .tile
+            ? PopupTile.topRowCount(for: items, fontSize: fontSize, near: anchor.origin) : 0
+        lastTileTopCount = topCount
         let host = NSHostingController(rootView: ListView(items: items, selected: selected,
-                                                          horizontal: horizontal, fontSize: fontSize))
+                                                          layout: layout, fontSize: fontSize,
+                                                          tileTopCount: topCount))
         let panel = self.panel ?? makePanel()
         panel.contentViewController = host
         panel.layoutIfNeeded()
         let size = host.view.fittingSize
         panel.setContentSize(size)
-        panel.setFrameOrigin(clamp(NSPoint(x: topLeft.x, y: topLeft.y - size.height), size: size))
+        panel.setFrameOrigin(PopupPlacement.origin(below: anchor, size: size))
         panel.orderFront(nil) // NOT makeKey: must not take focus from the text field.
     }
 
@@ -25,68 +36,52 @@ final class AutocompleteOverlay {
     }
 
     private func makePanel() -> NSPanel {
-        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
-                            backing: .buffered, defer: true)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .floating
-        panel.ignoresMouseEvents = true
-        panel.hidesOnDeactivate = false
-        panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        let panel = PopupPanel.make(ignoresMouseEvents: true) // purely keyboard-driven
         self.panel = panel
         return panel
-    }
-
-    /// Keeps the panel fully on the screen that holds the anchor.
-    private func clamp(_ origin: NSPoint, size: NSSize) -> NSPoint {
-        let anchor = NSPoint(x: origin.x, y: origin.y + size.height)
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(anchor) }) ?? NSScreen.main else {
-            return origin
-        }
-        let v = screen.visibleFrame
-        return NSPoint(x: min(max(origin.x, v.minX + 4), v.maxX - size.width - 4),
-                       y: min(max(origin.y, v.minY + 4), v.maxY - size.height - 4))
     }
 }
 
 private struct ListView: View {
     let items: [String]
     let selected: Int
-    let horizontal: Bool
+    let layout: PopupLayout
     let fontSize: CGFloat
+    /// Items on the first row of a tile, measured in `AutocompleteOverlay.show()`; 0 = even split.
+    var tileTopCount = 0
 
     var body: some View {
         Group {
-            if horizontal {
-                HStack(spacing: 4) {
-                    ForEach(itemIndices, id: \.self) { chip($0) }
-                }
-            } else {
+            switch layout {
+            case .column:
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(itemIndices, id: \.self) { chip($0) }
+                    ForEach(itemIndices, id: \.self) { cell($0, fillsWidth: true) }
+                }
+            case .line:
+                HStack(spacing: PopupMetrics.cellSpacing) {
+                    ForEach(itemIndices, id: \.self) { cell($0) }
+                }
+            case .tile:
+                // Two rows, filled left to right. The split is measured in show(), so every word
+                // that fits stays on the first row. Both rows start at the leading edge.
+                let topCount = tileTopCount > 0 ? tileTopCount : PopupLayout.tileColumns(forCount: items.count)
+                let topRow = Array(items.indices.prefix(topCount))
+                let bottomRow = Array(items.indices.dropFirst(topCount))
+                VStack(alignment: .leading, spacing: PopupMetrics.cellSpacing) {
+                    HStack(spacing: PopupMetrics.cellSpacing) { ForEach(topRow, id: \.self) { cell($0) } }
+                    if !bottomRow.isEmpty {
+                        HStack(spacing: PopupMetrics.cellSpacing) { ForEach(bottomRow, id: \.self) { cell($0) } }
+                    }
                 }
             }
         }
-        .padding(2)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-        .fixedSize()
+        .popupChrome()
     }
 
     private var itemIndices: [Int] { Array(items.indices) }
 
-    // Weight stays constant (only the background and color change on selection) so the layout does
-    // not resize as the selection moves.
-    private func chip(_ index: Int) -> some View {
-        Text(items[index])
-            .font(.system(size: fontSize, weight: .regular))
-            .foregroundStyle(index == selected ? Color.accentColor : Color.primary)
-            .lineLimit(1)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .frame(maxWidth: horizontal ? nil : .infinity, alignment: .leading)
-            .background(index == selected ? Color.accentColor.opacity(0.18) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 4))
+    private func cell(_ index: Int, fillsWidth: Bool = false) -> some View {
+        PopupCell(text: items[index], isSelected: index == selected, fontSize: fontSize,
+                  fillsWidth: fillsWidth)
     }
 }

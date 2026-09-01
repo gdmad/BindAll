@@ -93,8 +93,78 @@ struct HotkeyConfig: Codable, Hashable {
     static let translate = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true), repeatCount: 3)
     static let screenTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true), repeatCount: 1)
     static let quickTranslate = HotkeyConfig(keyCode: 14, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
-    /// Correct (LanguageTool): Cmd+Shift+C by default.
-    static let correct = HotkeyConfig(keyCode: 8, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 1)
+}
+
+// MARK: - LanguageTool connection
+
+/// How BindAll reaches LanguageTool. The three ways need different fields, and mixing them up is the
+/// usual source of trouble: the free public server rejects any credentials (HTTP 400), while Premium
+/// lives on a *different* host and requires them. Making the mode explicit lets the UI show only the
+/// relevant fields and lets the resolver never send credentials where they do not belong.
+enum LanguageToolMode: String, Codable, CaseIterable {
+    case free
+    case premium
+    case selfHosted
+
+    var displayName: String {
+        switch self {
+        case .free: return "Free public"
+        case .premium: return "Premium"
+        case .selfHosted: return "Self-hosted"
+        }
+    }
+
+    /// The URL pre-filled when the user picks this mode; nil for self-hosted (keeps the current URL).
+    /// The field stays editable, so this is only a starting point.
+    var defaultURL: String? {
+        switch self {
+        case .free: return "https://api.languagetool.org/v2"
+        case .premium: return "https://api.languagetoolplus.com/v2"
+        case .selfHosted: return nil
+        }
+    }
+}
+
+// MARK: - Popup layout
+
+/// How the floating popups arrange their items. Shared by autocomplete suggestions and proofread
+/// fixes, so both feature the same three looks.
+enum PopupLayout: String, Codable, CaseIterable {
+    case column
+    case line
+    case tile
+
+    var displayName: String {
+        switch self {
+        case .column: return "Column"
+        case .line: return "Line"
+        case .tile: return "Tile (2 rows)"
+        }
+    }
+
+    /// Columns in tile mode: the grid is exactly two rows, filled left to right.
+    static func tileColumns(forCount count: Int) -> Int {
+        max(1, (count + 1) / 2)
+    }
+
+    /// Moves a selection by `deltaX`/`deltaY` steps inside a two-row tile grid of `count` items.
+    /// Horizontal movement walks the row-major order and wraps; vertical movement steps a whole row
+    /// (columns) and clamps at the ends. `topRowCount` overrides the column count with the number of
+    /// items actually placed on the first row (a width-measured split); 0 falls back to the even
+    /// `tileColumns` split. When everything fits on one row there is no second row to move to, so
+    /// vertical movement does nothing rather than jumping to the far end of the single row.
+    static func tileIndex(from index: Int, deltaX: Int, deltaY: Int, count: Int,
+                          topRowCount: Int = 0) -> Int {
+        guard count > 0 else { return 0 }
+        let clamped = max(0, min(index, count - 1))
+        if deltaX != 0 { return (clamped + deltaX + count) % count }
+        if deltaY != 0 {
+            let columns = topRowCount > 0 ? min(topRowCount, count) : tileColumns(forCount: count)
+            guard columns < count else { return clamped }
+            return max(0, min(count - 1, clamped + deltaY * columns))
+        }
+        return clamped
+    }
 }
 
 // MARK: - Root settings
@@ -118,14 +188,23 @@ struct Settings: Codable, Equatable {
     // Suggest a completion for the word being typed, accept with Tab.
     var autocompleteEnabled: Bool = false
     var autocompleteCount: Int = 5            // how many suggestions to show (1...9)
-    var autocompleteHorizontal: Bool = false  // false = column (Up/Down), true = line (Left/Right)
-    var autocompleteFontSize: Int = 13        // suggestion text size (10...20)
+    var popupFontSize: Int = 13               // text size in both popups: autocomplete and proofread (10...20)
+    var autocompleteLayout: PopupLayout = .column  // how the suggestions are arranged
     var autocompleteLanguages: [String] = []  // dictionary languages (BCP-47); empty = auto-detect
     var autocompleteLearn: Bool = true        // learn accepted/typed words and rank them
     var autocompleteNextWord: Bool = true     // predict the next word after a space
     var autocompleteAcceptReturn: Bool = true // accept with Return in addition to Tab
+    var autocompleteContextRanking: Bool = true // rank completions by the preceding words (n-grams)
     var autocompleteAppMode: String = "all"   // "all" | "allow" | "deny"
     var autocompleteApps: [String] = []       // bundle identifiers for allow/deny
+
+    // Proofread behaviour. Whether it runs at all, the server and the language come from the
+    // LanguageTool settings below; there is no shortcut, it checks as you type.
+    var proofreadMaxReplacements: Int = 3      // fixes listed per issue (1...10)
+    var proofreadLayout: PopupLayout = .column // how the fixes are arranged in the popup
+    var proofreadMinLength: Int = 12           // shortest text worth checking
+    var proofreadAppMode: String = "all"       // "all" | "allow" | "deny"
+    var proofreadApps: [String] = []           // bundle identifiers for allow/deny
 
     // History of recent results (menu-bar submenu)
     var historyEnabled: Bool = true
@@ -135,13 +214,25 @@ struct Settings: Codable, Equatable {
     var sourceLanguage: String = "auto"   // BCP-47 code or "auto"
     var targetLanguage: String = "en"     // BCP-47 code
 
-    // Correct (LanguageTool): a separate, optional action with its own shortcut. The token (if any)
-    // lives in the Keychain; only non-secret config is stored here.
+    // Proofread (LanguageTool): optional, has no shortcut -- it checks as you type. The token (if
+    // any) lives in the Keychain; only non-secret config is stored here.
     var correctEnabled: Bool = false
-    var languageToolBaseURL: String = "https://api.languagetool.org/v2"
-    var languageToolUsername: String = ""           // Premium only (account email)
+    var languageToolMode: LanguageToolMode = .free
+    var languageToolBaseURL: String = "https://api.languagetool.org/v2"  // used only in self-hosted mode
+    var languageToolUsername: String = ""           // Premium account email
     var languageToolLanguage: String = "auto"        // BCP-47 code or "auto"
-    var correctHotkey: HotkeyConfig = .correct
+
+    /// The base URL, username and apiKey to actually put on the wire, resolved from the mode.
+    /// Only Premium sends credentials: the public server rejects them, and a self-hosted server is
+    /// reached by URL alone. `token` is read from the Keychain by the caller.
+    func languageToolConnection(token: String) -> (baseURL: String, username: String, apiKey: String) {
+        switch languageToolMode {
+        case .free, .selfHosted:
+            return (languageToolBaseURL, "", "")
+        case .premium:
+            return (languageToolBaseURL, languageToolUsername, token)
+        }
+    }
 
     // Providers
     /// When set, the OpenRouter model list (Fetch) shows only free models.
@@ -172,13 +263,21 @@ struct Settings: Codable, Equatable {
 extension Settings {
     enum CodingKeys: String, CodingKey {
         case enabled, defaultEngine, separator, defaultPrompt, actionKeys,
-             restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteHorizontal,
-             autocompleteFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
-             autocompleteAcceptReturn, autocompleteAppMode, autocompleteApps,
+             restoreClipboard, maskAISlop, autocompleteEnabled, autocompleteCount, autocompleteLayout,
+             popupFontSize, autocompleteLanguages, autocompleteLearn, autocompleteNextWord,
+             autocompleteAcceptReturn, autocompleteContextRanking, autocompleteAppMode, autocompleteApps,
+             proofreadMaxReplacements, proofreadLayout,
+             proofreadMinLength, proofreadAppMode, proofreadApps,
              historyEnabled, sourceLanguage, targetLanguage,
-             correctEnabled, languageToolBaseURL, languageToolUsername, languageToolLanguage, correctHotkey,
+             correctEnabled, languageToolMode, languageToolBaseURL, languageToolUsername, languageToolLanguage,
              openRouterFreeOnly, providers, defaultActionHotkey, translateHotkey,
              screenTranslateHotkey, quickTranslateHotkey
+    }
+
+    /// Old key names still honoured on decode (never written back).
+    private enum LegacyKeys: String, CodingKey {
+        case autocompleteFontSize
+        case autocompleteHorizontal
     }
 
     init(from decoder: Decoder) throws {
@@ -193,14 +292,31 @@ extension Settings {
         if let v = try c.decodeIfPresent(Bool.self, forKey: .maskAISlop) { maskAISlop = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteEnabled) { autocompleteEnabled = v }
         if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteCount) { autocompleteCount = v }
-        if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteHorizontal) { autocompleteHorizontal = v }
-        if let v = try c.decodeIfPresent(Int.self, forKey: .autocompleteFontSize) { autocompleteFontSize = v }
+        if let v = try c.decodeIfPresent(PopupLayout.self, forKey: .autocompleteLayout) {
+            autocompleteLayout = v
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
+                  let v = try legacy.decodeIfPresent(Bool.self, forKey: .autocompleteHorizontal) {
+            autocompleteLayout = v ? .line : .column
+        }
+        // autocompleteFontSize is the legacy name of popupFontSize (it now drives both popups).
+        if let v = try c.decodeIfPresent(Int.self, forKey: .popupFontSize) {
+            popupFontSize = v
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self),
+                  let v = try legacy.decodeIfPresent(Int.self, forKey: .autocompleteFontSize) {
+            popupFontSize = v
+        }
         if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteLanguages) { autocompleteLanguages = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteLearn) { autocompleteLearn = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteNextWord) { autocompleteNextWord = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteAcceptReturn) { autocompleteAcceptReturn = v }
+        if let v = try c.decodeIfPresent(Bool.self, forKey: .autocompleteContextRanking) { autocompleteContextRanking = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .autocompleteAppMode) { autocompleteAppMode = v }
         if let v = try c.decodeIfPresent([String].self, forKey: .autocompleteApps) { autocompleteApps = v }
+        if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMaxReplacements) { proofreadMaxReplacements = v }
+        if let v = try c.decodeIfPresent(PopupLayout.self, forKey: .proofreadLayout) { proofreadLayout = v }
+        if let v = try c.decodeIfPresent(Int.self, forKey: .proofreadMinLength) { proofreadMinLength = v }
+        if let v = try c.decodeIfPresent(String.self, forKey: .proofreadAppMode) { proofreadAppMode = v }
+        if let v = try c.decodeIfPresent([String].self, forKey: .proofreadApps) { proofreadApps = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .historyEnabled) { historyEnabled = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .sourceLanguage) { sourceLanguage = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .targetLanguage) { targetLanguage = v }
@@ -208,7 +324,7 @@ extension Settings {
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolBaseURL) { languageToolBaseURL = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolUsername) { languageToolUsername = v }
         if let v = try c.decodeIfPresent(String.self, forKey: .languageToolLanguage) { languageToolLanguage = v }
-        if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .correctHotkey) { correctHotkey = v }
+        if let v = try c.decodeIfPresent(LanguageToolMode.self, forKey: .languageToolMode) { languageToolMode = v }
         if let v = try c.decodeIfPresent(Bool.self, forKey: .openRouterFreeOnly) { openRouterFreeOnly = v }
         if let v = try c.decodeIfPresent([ProviderConfig].self, forKey: .providers) { providers = v }
         if let v = try c.decodeIfPresent(HotkeyConfig.self, forKey: .defaultActionHotkey) { defaultActionHotkey = v }

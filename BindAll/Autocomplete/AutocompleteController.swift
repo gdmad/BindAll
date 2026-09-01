@@ -43,10 +43,15 @@ final class AutocompleteController {
 
     /// Minimal state the tap-thread callback reads to decide whether to consume a key. Written on the
     /// main thread via `syncSuppression()`; read on the tap thread under `suppressionLock`.
+    /// The word and the typed partial travel in the snapshot rather than an index: by the time main
+    /// runs the accept, a refresh that finished in between may already have replaced `candidates` and
+    /// `partial`, and an index would then insert a different word and delete the wrong number of
+    /// characters. What the user saw is what gets inserted.
     private struct Suppression {
         var hasSuggestion = false
-        var selectedIndex = 0
-        var horizontal = false
+        var selectedWord = ""
+        var partial = ""
+        var layout = PopupLayout.column
         var acceptReturn = true
     }
     private var suppression = Suppression()
@@ -60,7 +65,7 @@ final class AutocompleteController {
     private var candidates: [String] = []
     private var selectedIndex = 0
     private var partial = ""
-    private var lastAnchor = NSPoint.zero
+    private var lastAnchor = CGRect.zero
 
     // Fallback "current word" assembled from keystrokes when AX text is unavailable.
     private var typedBuffer = ""
@@ -69,12 +74,13 @@ final class AutocompleteController {
     enum AppFilterMode: String { case all, allow, deny }
     struct Config {
         var maxSuggestions = 5
-        var horizontal = false
+        var layout = PopupLayout.column
         var fontSize: CGFloat = 13
         var languages: [String] = []
         var learn = true
         var nextWord = true
         var acceptReturn = true
+        var contextRanking = true   // rank completions by the preceding words (the winning variant)
         var appMode = AppFilterMode.all
         var apps: Set<String> = []
     }
@@ -86,10 +92,49 @@ final class AutocompleteController {
     private let store = AutocompleteLearningStore.shared
 
     private let minPrefix = 3
-    /// Marks keystrokes we inject so the tap ignores them.
-    private let injectedMarker: Int64 = 0x424E444C // "BNDL"
+
+    /// Set while another feature owns the keyboard (a proofread popup is up). Both consume Tab, so
+    /// only one may be suggesting at a time. Counted, so overlapping suspend/resume pairs cannot
+    /// resume us early.
+    private var suspendCount = 0
+    private var suspended: Bool { suspendCount > 0 }
 
     var isRunning: Bool { running }
+
+    // MARK: - Experiment switch
+
+    /// Debug/experiment key in UserDefaults: `baseline` (default), `context` (variant A/B),
+    /// `semantic` (variant C). Not exposed in the Settings UI; set with e.g.
+    /// `defaults write com.evgeny.bindall AutocompleteVariant -string context`.
+    private static let variantKey = "AutocompleteVariant"
+
+    /// The selected ranking mode. A `defaults write` on `AutocompleteVariant` (baseline|context|
+    /// semantic) overrides the settings for experiments; otherwise the settings decide: the semantic
+    /// mode is experimental and never on by default, context ranking is the default behavior.
+    private func rankingMode() -> AutocompleteEngine.Mode {
+        if let raw = UserDefaults.standard.string(forKey: Self.variantKey), !raw.isEmpty {
+            return AutocompleteEngine.Mode(rawValue: raw) ?? .baseline
+        }
+        return config.contextRanking ? .context : .baseline
+    }
+
+    /// Context scorer for the mode, or nil when the mode does not use one. Called on the work queue
+    /// (read-only store access). For the context mode it closes over the two preceding words so the
+    /// engine can score each candidate with `store.contextScore`.
+    private func contextScorer(mode: AutocompleteEngine.Mode, prev1: String?, prev2: String?) -> ((String) -> Double)? {
+        guard mode == .context else { return nil }
+        let p1 = prev1, p2 = prev2
+        return { [store] word in store.contextScore(word: word, prev1: p1, prev2: p2) }
+    }
+
+    /// Semantic scorer for the mode, or nil when the mode does not use one. Called on the work
+    /// queue. For the semantic mode it closes over the context words and scores each candidate by
+    /// cosine similarity against the context embedding (falls back to 0 when the model is not
+    /// ready, which degrades the mode to the pool order).
+    private func semanticScorer(mode: AutocompleteEngine.Mode, context: String) -> ((String) -> Double)? {
+        guard mode == .semantic, !context.isEmpty else { return nil }
+        return { word in SemanticRanker.shared.similarity(context: context, candidate: word) ?? 0 }
+    }
 
     /// Applies user settings.
     func configure(_ config: Config) {
@@ -97,8 +142,23 @@ final class AutocompleteController {
         syncSuppression()
     }
 
+    /// Hides any suggestion and stops making new ones until `resume()`.
+    func suspend() {
+        suspendCount += 1
+        guard suspendCount == 1 else { return }
+        debounce?.cancel()
+        resetWord()
+    }
+
+    func resume() {
+        suspendCount = max(0, suspendCount - 1)
+    }
+
     func start() {
         guard !running, AccessibilityPermission.isGranted else { return }
+        // Preload the semantic embedding model (if its assets are available) so the first
+        // suggestion in semantic mode is not delayed by model loading.
+        SemanticRanker.shared.warmup()
         let mask = (1 << CGEventType.keyDown.rawValue)
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
@@ -196,9 +256,7 @@ final class AutocompleteController {
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
 
         // Ignore the keystrokes we inject ourselves.
-        if event.getIntegerValueField(.eventSourceUserData) == injectedMarker {
-            return Unmanaged.passUnretained(event)
-        }
+        if InjectedEvents.isInjected(event) { return Unmanaged.passUnretained(event) }
 
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
@@ -218,9 +276,7 @@ final class AutocompleteController {
             return Unmanaged.passUnretained(event)
         }
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
-        if event.getIntegerValueField(.eventSourceUserData) == injectedMarker {
-            return Unmanaged.passUnretained(event)
-        }
+        if InjectedEvents.isInjected(event) { return Unmanaged.passUnretained(event) }
 
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
@@ -233,31 +289,40 @@ final class AutocompleteController {
 
         // Consume the keys that drive the popup — only as bare keys (any modifier, including Shift,
         // passes through, so e.g. Shift+Return still makes a newline).
-        let prevKey = snap.horizontal ? kVK_LeftArrow : kVK_UpArrow
-        let nextKey = snap.horizontal ? kVK_RightArrow : kVK_DownArrow
         let isReturn = keyCode == kVK_Return || keyCode == kVK_ANSI_KeypadEnter
         if keyCode == kVK_Tab || (isReturn && snap.acceptReturn) {
-            let index = snap.selectedIndex
-            DispatchQueue.main.async { [weak self] in self?.accept(index: index) }
+            let word = snap.selectedWord
+            let replacing = snap.partial
+            invalidateSuppression() // a second fast Tab must not be consumed against the accepted popup
+            DispatchQueue.main.async { [weak self] in self?.accept(word: word, replacing: replacing) }
             return nil
         }
         if keyCode == kVK_Escape {
+            invalidateSuppression()
             DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
             return nil
         }
-        if keyCode == prevKey {
-            DispatchQueue.main.async { [weak self] in self?.move(-1) }
-            return nil
-        }
-        if keyCode == nextKey {
-            DispatchQueue.main.async { [weak self] in self?.move(1) }
+        if let delta = Self.navDelta(for: keyCode, layout: snap.layout) {
+            DispatchQueue.main.async { [weak self] in self?.move(dx: delta.dx, dy: delta.dy) }
             return nil
         }
         // Any other key isn't part of the nav set: close the popup now (it touches UI, so on main)
         // instead of waiting for the monitor's onKey boundary handling to catch up, but let the key
         // through so it still reaches the field (and the monitor, which builds the next word).
+        // Kill the snapshot synchronously too: a fast Tab right after this key must NOT be consumed
+        // and accepted against a stale `partial` (that duplicated the just-typed letter).
+        invalidateSuppression()
         DispatchQueue.main.async { [weak self] in self?.clearSuggestion() }
         return Unmanaged.passUnretained(event)
+    }
+
+    /// Tap-thread side: marks the suggestion dead immediately, so a key arriving before main has
+    /// processed the matching clearSuggestion()/accept() is never matched against stale state. A
+    /// later syncSuppression() on main rewrites the snapshot unconditionally, so no re-arm hazard.
+    private func invalidateSuppression() {
+        os_unfair_lock_lock(&suppressionLock)
+        suppression.hasSuggestion = false
+        os_unfair_lock_unlock(&suppressionLock)
     }
 
     /// Reads the tap-thread suppression snapshot under the lock.
@@ -272,8 +337,10 @@ final class AutocompleteController {
     /// `candidates`, `selectedIndex`, or `config`.
     private func syncSuppression() {
         let hasSuggestion = !candidates.isEmpty
-        let snap = Suppression(hasSuggestion: hasSuggestion, selectedIndex: selectedIndex,
-                               horizontal: config.horizontal, acceptReturn: config.acceptReturn)
+        let snap = Suppression(hasSuggestion: hasSuggestion,
+                               selectedWord: candidates.indices.contains(selectedIndex) ? candidates[selectedIndex] : "",
+                               partial: partial,
+                               layout: config.layout, acceptReturn: config.acceptReturn)
         os_unfair_lock_lock(&suppressionLock)
         suppression = snap
         os_unfair_lock_unlock(&suppressionLock)
@@ -284,12 +351,14 @@ final class AutocompleteController {
             suppressorEnabled = hasSuggestion
             CGEvent.tapEnable(tap: tap, enable: hasSuggestion)
         }
-        setClickMonitor(enabled: hasSuggestion)
+        setClickMonitor(enabled: running)
     }
 
     /// The popup ignores mouse events, so a click never reaches it: without this it keeps floating on
     /// top after a click moves the caret away (an app switch is already covered by the observer in
-    /// `start()`, but a click inside the same app is not). Passive, and only alive while the popup is.
+    /// `start()`, but a click inside the same app is not). Passive, so it stays armed the whole time
+    /// the feature runs -- a click with no popup up still moves the caret, and leaving `typedBuffer`
+    /// and the preceding words behind would build the next suggestion from the word left behind.
     private func setClickMonitor(enabled: Bool) {
         if enabled {
             guard clickMonitor == nil else { return }
@@ -305,6 +374,7 @@ final class AutocompleteController {
     private func onKey(keyCode: Int, typed: String, modified: Bool) {
         // Every keystroke supersedes any refresh still computing on the work queue.
         refreshGeneration &+= 1
+        if suspended { return }
         if modified { resetWord(); return }
 
         // Space completes the current word: learn it and (optionally) predict the next word.
@@ -347,7 +417,10 @@ final class AutocompleteController {
         if !finished.isEmpty { prevWord2 = prevWord; prevWord = finished }
         typedBuffer = ""
         clearSuggestion()
-        if predictNext, config.nextWord, !prevWord.isEmpty {
+        // Whether there is anything to predict from is decided on the work queue, from the field
+        // itself where one is available -- not from prevWord, which only knows about the run of
+        // typing since the last click or app switch (see nextWordRefresh).
+        if predictNext, config.nextWord {
             scheduleRefresh(nextWord: true)
         }
     }
@@ -375,7 +448,11 @@ final class AutocompleteController {
         work.async { [weak self] in
             guard let self else { return }
             let resolvedPartial: String
-            let resolvedAnchor: NSPoint
+            let resolvedAnchor: CGRect
+            // Context for the re-ranking modes: the completed words before the caret. Prefer the AX
+            // field text (it is the source of truth for the partial); fall back to the keystroke
+            // tracker for apps that expose no text.
+            var contextWords: [String] = []
             switch self.focusState() {
             case .secure:
                 self.applyOnMain(gen) { $0.resetWord() }
@@ -383,18 +460,31 @@ final class AutocompleteController {
             case .text(let info):
                 resolvedPartial = AutocompleteEngine.partialWord(in: info.text, caretUTF16Offset: info.caret)
                 resolvedAnchor = self.anchor(for: info.element, caret: info.caret, primaryHeight: primaryHeight)
+                contextWords = AutocompleteEngine.precedingWords(in: info.text, caretUTF16Offset: info.caret, count: 2)
             case .unavailable:
                 resolvedPartial = fallback
                 resolvedAnchor = self.mouseAnchor()
+                if !self.prevWord.isEmpty { contextWords.append(self.prevWord) }
+                if !self.prevWord2.isEmpty { contextWords.append(self.prevWord2) }
             }
 
             guard resolvedPartial.count >= self.minPrefix else {
                 self.applyOnMain(gen) { $0.clearSuggestion() }
                 return
             }
-            let learned = cfg.learn ? self.store.completions(matching: resolvedPartial, limit: cfg.maxSuggestions) : []
-            let list = AutocompleteEngine.suggestions(for: resolvedPartial, languages: cfg.languages,
-                                                      learned: learned, limit: cfg.maxSuggestions)
+            // The re-ranking modes score a larger candidate pool than the visible list, so ask the
+            // store for more learned completions in those modes.
+            let mode = self.rankingMode()
+            let learnedLimit = mode == .baseline ? cfg.maxSuggestions
+                                                 : max(AutocompleteEngine.reRankPoolLimit, cfg.maxSuggestions)
+            let learned = cfg.learn ? self.store.completions(matching: resolvedPartial, limit: learnedLimit) : []
+            var req = AutocompleteEngine.Request(partial: resolvedPartial, languages: cfg.languages,
+                                                 learned: learned, limit: cfg.maxSuggestions, mode: mode)
+            req.contextScorer = self.contextScorer(mode: mode,
+                                                   prev1: contextWords.first,
+                                                   prev2: contextWords.count > 1 ? contextWords[1] : nil)
+            req.semanticScorer = self.semanticScorer(mode: mode, context: contextWords.joined(separator: " "))
+            let list = AutocompleteEngine.suggestions(request: req)
             self.applyOnMain(gen) { me in
                 guard !list.isEmpty else { me.clearSuggestion(); return }
                 me.partial = resolvedPartial
@@ -402,25 +492,46 @@ final class AutocompleteController {
                 me.candidates = list
                 me.selectedIndex = 0
                 me.lastAnchor = resolvedAnchor
-                me.overlay.show(list, selected: 0, horizontal: cfg.horizontal, fontSize: cfg.fontSize,
-                                topLeft: resolvedAnchor)
+                me.overlay.show(list, selected: 0, layout: cfg.layout, fontSize: cfg.fontSize,
+                                anchor: resolvedAnchor)
                 me.syncSuppression()
             }
         }
     }
 
     /// Suggests the next word (with an empty partial) after a space, from the learned bigrams.
+    ///
+    /// The context comes from the field itself where AX exposes one -- the same source `refresh()`
+    /// uses for ranking the current word -- rather than from `prevWord`/`prevWord2`, which only track
+    /// the run of typing since the last click, app switch or navigation key. Without this, pausing to
+    /// click back into a sentence (or returning from another app) and pressing space produced no
+    /// prediction at all, even though the words to predict from were sitting right there in the field.
     private func nextWordRefresh() {
-        guard appAllowed(), config.nextWord, !prevWord.isEmpty else { clearSuggestion(); return }
+        guard appAllowed(), config.nextWord else { clearSuggestion(); return }
         let gen = refreshGeneration
         let cfg = config
-        let p1 = prevWord
-        let p2 = prevWord2
+        let fallbackP1 = prevWord
+        let fallbackP2 = prevWord2
         let primaryHeight = primaryScreenHeight()
 
         work.async { [weak self] in
             guard let self else { return }
-            guard let anchor = self.currentAnchor(primaryHeight: primaryHeight) else {
+            let anchor: CGRect
+            var p1 = fallbackP1
+            var p2 = fallbackP2
+            switch self.focusState() {
+            case .secure:
+                self.applyOnMain(gen) { $0.clearSuggestion() }
+                return
+            case .text(let info):
+                anchor = self.anchor(for: info.element, caret: info.caret, primaryHeight: primaryHeight)
+                let words = AutocompleteEngine.precedingWords(in: info.text, caretUTF16Offset: info.caret, count: 2)
+                p1 = words.first ?? ""
+                p2 = words.count > 1 ? words[1] : ""
+            case .unavailable:
+                anchor = self.mouseAnchor()
+            }
+            guard !p1.isEmpty else {
                 self.applyOnMain(gen) { $0.clearSuggestion() }
                 return
             }
@@ -431,8 +542,8 @@ final class AutocompleteController {
                 me.candidates = words
                 me.selectedIndex = 0
                 me.lastAnchor = anchor
-                me.overlay.show(words, selected: 0, horizontal: cfg.horizontal, fontSize: cfg.fontSize,
-                                topLeft: anchor)
+                me.overlay.show(words, selected: 0, layout: cfg.layout, fontSize: cfg.fontSize,
+                                anchor: anchor)
                 me.syncSuppression()
             }
         }
@@ -447,18 +558,54 @@ final class AutocompleteController {
         }
     }
 
-    private func move(_ delta: Int) {
+    /// Which arrow keys drive the suggestion selection for a layout, and in which direction. A key a
+    /// layout does not navigate with returns nil and falls through to the "user moved on" close path.
+    private static func navDelta(for keyCode: Int, layout: PopupLayout) -> (dx: Int, dy: Int)? {
+        switch layout {
+        case .column:
+            switch keyCode {
+            case kVK_UpArrow: return (0, -1)
+            case kVK_DownArrow: return (0, 1)
+            default: return nil
+            }
+        case .line:
+            switch keyCode {
+            case kVK_LeftArrow: return (-1, 0)
+            case kVK_RightArrow: return (1, 0)
+            default: return nil
+            }
+        case .tile:
+            switch keyCode {
+            case kVK_UpArrow: return (0, -1)
+            case kVK_DownArrow: return (0, 1)
+            case kVK_LeftArrow: return (-1, 0)
+            case kVK_RightArrow: return (1, 0)
+            default: return nil
+            }
+        }
+    }
+
+    private func move(dx: Int, dy: Int) {
         guard !candidates.isEmpty else { return }
-        selectedIndex = max(0, min(candidates.count - 1, selectedIndex + delta))
-        overlay.show(candidates, selected: selectedIndex, horizontal: config.horizontal,
-                     fontSize: config.fontSize, topLeft: lastAnchor)
+        let count = candidates.count
+        let next: Int
+        switch config.layout {
+        case .column: next = max(0, min(count - 1, selectedIndex + dy))
+        case .line: next = max(0, min(count - 1, selectedIndex + dx))
+        case .tile:
+            next = PopupLayout.tileIndex(from: selectedIndex, deltaX: dx, deltaY: dy, count: count,
+                                         topRowCount: overlay.lastTileTopCount)
+        }
+        guard next != selectedIndex else { return }
+        selectedIndex = next
+        overlay.show(candidates, selected: selectedIndex, layout: config.layout,
+                     fontSize: config.fontSize, anchor: lastAnchor)
         syncSuppression()
     }
 
-    private func accept(index: Int) {
-        guard index >= 0, index < candidates.count else { clearSuggestion(); return }
-        let word = candidates[index]
-        let current = partial
+    /// Inserts `word`, replacing the `partial` the user had typed when the popup showed it.
+    private func accept(word: String, replacing current: String) {
+        guard !word.isEmpty else { clearSuggestion(); return }
         if config.learn {
             store.record(word: word,
                          prev1: prevWord.isEmpty ? nil : prevWord,
@@ -494,14 +641,6 @@ final class AutocompleteController {
         case .all: return true
         case .allow: return config.apps.contains(bundle)
         case .deny: return !config.apps.contains(bundle)
-        }
-    }
-
-    private func currentAnchor(primaryHeight: CGFloat?) -> NSPoint? {
-        switch focusState() {
-        case .secure: return nil
-        case .text(let info): return anchor(for: info.element, caret: info.caret, primaryHeight: primaryHeight)
-        case .unavailable: return mouseAnchor()
         }
     }
 
@@ -553,15 +692,16 @@ final class AutocompleteController {
         return .text(TextInfo(element: element, text: text, caret: range.location))
     }
 
-    /// Best anchor for the chip: caret rect, else the focused element's frame, else the mouse.
-    private func anchor(for element: AXUIElement, caret: Int, primaryHeight: CGFloat?) -> NSPoint {
+    /// Best anchor for the chip: caret rect, else the focused element's frame, else the mouse. AppKit
+    /// screen coordinates -- its height lets the popup rise above it when there is no room below.
+    private func anchor(for element: AXUIElement, caret: Int, primaryHeight: CGFloat?) -> CGRect {
         caretAnchor(for: element, caret: caret, primaryHeight: primaryHeight)
             ?? elementFrameAnchor(for: element, primaryHeight: primaryHeight) ?? mouseAnchor()
     }
 
-    /// Bottom-left of the focused element's frame (many web/Electron fields expose a frame even when
-    /// they do not expose a caret rect). Quartz top-left origin -> AppKit bottom-left.
-    private func elementFrameAnchor(for element: AXUIElement, primaryHeight: CGFloat?) -> NSPoint? {
+    /// The focused element's frame (many web/Electron fields expose a frame even when they do not
+    /// expose a caret rect). Quartz top-left origin -> AppKit bottom-left, inset the usual 6pt.
+    private func elementFrameAnchor(for element: AXUIElement, primaryHeight: CGFloat?) -> CGRect? {
         var posRef: AnyObject?
         var sizeRef: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
@@ -572,11 +712,13 @@ final class AutocompleteController {
               AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
               size.width > 0, size.height > 0 else { return nil }
         let base = primaryHeight ?? (pos.y + size.height)
-        return NSPoint(x: pos.x + 6, y: base - (pos.y + size.height) + 6)
+        let rect = UnderlineGeometry.appKitRect(fromQuartz: CGRect(origin: pos, size: size),
+                                                primaryScreenHeight: base)
+        return rect.offsetBy(dx: 6, dy: 6)
     }
 
-    /// AppKit screen point just below the caret, derived from the AX caret rect (Quartz, top-left).
-    private func caretAnchor(for element: AXUIElement, caret: Int, primaryHeight: CGFloat?) -> NSPoint? {
+    /// AppKit rect of the caret, derived from the AX caret rect (Quartz, top-left).
+    private func caretAnchor(for element: AXUIElement, caret: Int, primaryHeight: CGFloat?) -> CGRect? {
         var cfRange = CFRange(location: max(0, caret - 1), length: 1)
         guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else { return nil }
         var boundsRef: AnyObject?
@@ -585,12 +727,12 @@ final class AutocompleteController {
         var rect = CGRect.zero
         guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect), rect.width > 0 || rect.height > 0 else { return nil }
         let base = primaryHeight ?? rect.maxY
-        return NSPoint(x: rect.minX, y: base - rect.maxY)
+        return UnderlineGeometry.appKitRect(fromQuartz: rect, primaryScreenHeight: base)
     }
 
-    private func mouseAnchor() -> NSPoint {
+    private func mouseAnchor() -> CGRect {
         let p = NSEvent.mouseLocation
-        return NSPoint(x: p.x, y: p.y - 18)
+        return CGRect(x: p.x, y: p.y - 18, width: 1, height: 0)
     }
 
     // MARK: - Injection
@@ -618,8 +760,8 @@ final class AutocompleteController {
             down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
             up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
         }
-        down.setIntegerValueField(.eventSourceUserData, value: injectedMarker)
-        up.setIntegerValueField(.eventSourceUserData, value: injectedMarker)
+        InjectedEvents.mark(down)
+        InjectedEvents.mark(up)
         down.post(tap: .cgAnnotatedSessionEventTap)
         up.post(tap: .cgAnnotatedSessionEventTap)
     }
@@ -630,8 +772,8 @@ final class AutocompleteController {
         for _ in 0..<count {
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: false) else { continue }
-            down.setIntegerValueField(.eventSourceUserData, value: injectedMarker)
-            up.setIntegerValueField(.eventSourceUserData, value: injectedMarker)
+            InjectedEvents.mark(down)
+            InjectedEvents.mark(up)
             down.post(tap: .cgAnnotatedSessionEventTap)
             up.post(tap: .cgAnnotatedSessionEventTap)
         }

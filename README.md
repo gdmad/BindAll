@@ -10,22 +10,7 @@
   On-device by default (Apple Intelligence + Apple Translation), with optional cloud providers.
 </p>
 
-No Dock icon: BindAll lives in the menu bar (`LSUIElement`).
-
-## Screenshots
-
-<table>
-  <tr>
-    <td align="center"><img src="assets/screenshots/general.png" width="250" alt="General"><br><sub><b>General</b></sub></td>
-    <td align="center"><img src="assets/screenshots/actions.png" width="250" alt="Actions"><br><sub><b>Actions</b></sub></td>
-    <td align="center"><img src="assets/screenshots/providers.png" width="250" alt="Providers"><br><sub><b>Providers</b></sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="assets/screenshots/translation.png" width="250" alt="Translation"><br><sub><b>Translation</b></sub></td>
-    <td align="center"><img src="assets/screenshots/shortcuts.png" width="250" alt="Shortcuts"><br><sub><b>Shortcuts</b></sub></td>
-    <td></td>
-  </tr>
-</table>
+No Dock icon: BindAll lives in the menu bar (`LSUIElement`); the icon pulses while an action runs.
 
 ## Features
 
@@ -40,22 +25,26 @@ No Dock icon: BindAll lives in the menu bar (`LSUIElement`).
 - **Quick Translate** — a window to type text and translate it on the fly, with a Source/Target
   language pair and swap.
 - **OCR translate** — drag-select a screen region; text is recognized (Vision) and translated.
-- **Correct (LanguageTool)** — optional: a dedicated shortcut that fixes grammar and spelling in the
-  selection via a [LanguageTool](https://languagetool.org) server (public, self-hosted, or Premium).
-  Enable it in Settings → General; configure the server in Providers.
+- **Proofread (LanguageTool)** — optional: shortly after you pause typing, the focused field is
+  checked by a [LanguageTool](https://languagetool.org) server (public, self-hosted, or Premium) and
+  every issue is underlined in place. Click an underlined word to pick a fix; Tab moves to the next
+  issue, and applying a fix walks straight to the next one when several are found. No shortcut
+  involved. Enable and configure it all on the Proofread tab.
 - **Providers** — Apple on-device (default), DeepSeek, OpenRouter, OpenAI, Ollama. Add an API key,
   pick a model, Test connection. OpenRouter has a "free models only" filter.
 - **History** — the last results are kept locally and reachable from the menu bar (click to copy).
 - **Mask AI Slop** — optional: normalize em/en dashes, smart quotes/apostrophes, strip emoji.
-- **Word autocomplete** *(off by default)* — as you type, a list of case-matched
-  completions appears near the caret; arrow keys move the selection, **Tab** (and optionally Return)
-  inserts. Also predicts the next word after a space and learns the words you use, locally. Configure
-  count, layout, text size, dictionary language, and per-app allow/deny on the Autocomplete tab.
+- **Word autocomplete** *(off by default)* — as you type, a list of case-matched completions appears
+  near the caret; arrow keys move the selection, **Tab** (and optionally Return) inserts. Completions
+  are ranked by the preceding words, not just personal frequency; it also predicts the next word
+  after a space and learns the words you use, locally, with a review sheet that flags likely typos
+  for cleanup. Enable and configure it all on the Autocomplete tab: count, layout, text size,
+  dictionary language, and per-app allow/deny.
 - **Launch at login**, automatic light/dark, and in-app **Check for Updates**.
 
 ## Default shortcuts
 
-All shortcuts are configurable in Settings → Shortcuts.
+All shortcuts are configurable in Settings → Actions → Shortcuts.
 
 | Shortcut | Action |
 |---|---|
@@ -63,7 +52,6 @@ All shortcuts are configurable in Settings → Shortcuts.
 | `Cmd+C` ×3 | Translate the selection (popup) |
 | `Cmd+E` | OCR: select a screen region and translate it |
 | `Shift+Cmd+E` | Open Quick Translate |
-| `Shift+Cmd+C` | Correct with LanguageTool (when enabled) |
 | `Esc` | Cancel the action in progress |
 
 Because `Cmd+C` is the real copy shortcut, pressing it the configured number of times both copies the
@@ -126,32 +114,36 @@ Pure-logic unit tests (no Xcode host needed):
 ./Tests/run_tests.sh
 ```
 
+The autocomplete ranking has its own evaluator under `Tests/` (see [AGENTS.md](AGENTS.md) for how
+to run it).
+
 ## Architecture
 
 ```
 BindAll/
-  App/        BindAllApp, AppDelegate (menu bar + windows), AppState, UpdateChecker
-  Hotkeys/    HotkeyMonitor (CGEventTap), HotkeyCoordinator, AccessibilityPermission
-  Selection/  SelectionReader, TextInjector (synthetic Cmd+C / Cmd+V)
-  Engines/    AIEngine, AppleFoundationEngine, OpenAICompatibleEngine, TranslationService, OCRService
-  Actions/    PromptParser, ActionRouter (EngineFactory), MaskAISlop
-  UI/         SettingsView, ProvidersSettingsView, ActionKeysSettingsView, ShortcutRecorder,
-              PopupController, QuickTranslateController
-  Store/      Settings, ActionKey, KeychainStore, HistoryStore, LoginItemManager, AppLanguages
-  Autocomplete/ AutocompleteController (CGEventTap), AutocompleteEngine, AutocompleteLearningStore,
-                AutocompleteOverlay
-Tests/        main.swift, run_tests.sh
+  App/           AppDelegate (menu bar, settings window, icon), AppState, UpdateChecker
+  Hotkeys/       HotkeyMonitor (CGEventTap), HotkeyCoordinator, AccessibilityPermission
+  Selection/     TextInjector (synthetic Cmd+C / Cmd+V), InjectedEvents
+  Engines/       AIEngine, AppleFoundationEngine, OpenAICompatibleEngine, LanguageToolEngine,
+                 TranslationService, OCRService
+  Actions/       PromptParser, ActionRouter (EngineFactory), MaskAISlop
+  Autocomplete/  AutocompleteController (CGEventTap), AutocompleteEngine, AutocompleteLearningStore,
+                 AutocompleteOverlay, LearnedWordAudit
+  Proofread/     ProofreadController, ProofreadAX, IssueApplier, IssueMerger, UnderlineOverlay
+  UI/            SettingsView + one view per tab, PopupKit (shared popup chrome/placement)
+  Store/         Settings, ActionKey, KeychainStore, HistoryStore, LoginItemManager, AppLanguages
+Tests/           run_tests.sh, main.swift, autocomplete ranking evaluator
 ```
 
 The visible UI (status item, settings window, popups) is driven from `AppDelegate` with AppKit; the
-SwiftUI `App` only hosts the settings views. See [AGENTS.md](AGENTS.md) for contributor conventions.
+SwiftUI `App` only hosts the settings views. See [AGENTS.md](AGENTS.md) for the full structure and
+contributor conventions.
 
 ## Credits
 
-- Russian next-word seed: bigram frequencies from
-  [orgtre/google-books-ngram-frequency](https://github.com/orgtre/google-books-ngram-frequency)
-  (derived from the Google Books Ngram Corpus), licensed
-  [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+- Russian autocomplete seed data (next-word prediction and completion ranking): bigram and trigram
+  frequencies from the Leipzig Corpora Collection, `rus_news_2023` sample, licensed
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ## License
 

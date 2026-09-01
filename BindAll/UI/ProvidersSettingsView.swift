@@ -9,11 +9,7 @@ struct ProvidersSettingsView: View {
     @State private var isTesting = false
     @State private var models: [String] = []
 
-    // LanguageTool ("Correct") connection state.
-    @State private var ltTokenDraft: String = ""
-    @State private var ltStatus: String = ""
-    @State private var ltOK: Bool?
-    @State private var ltTesting = false
+    @State private var testTask: Task<Void, Never>?
 
     private var cloudKinds: [ProviderKind] {
         ProviderKind.allCases.filter { $0 != .apple }
@@ -28,30 +24,47 @@ struct ProvidersSettingsView: View {
 
     var body: some View {
         Form {
+            // The engine that actually runs, and below it the credentials for each provider: the
+            // two used to live on different tabs, which read as if they were unrelated.
+            Section {
+                Picker("Engine for text actions", selection: $appState.settings.defaultEngine) {
+                    ForEach(ProviderKind.allCases) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+            } header: {
+                helpHeader("Engine", "Used for the default action and custom prompts. Translation always runs on-device via Apple's Translation framework, and proofreading always uses LanguageTool.")
+            }
+
             Section {
                 Picker("Provider", selection: $selectedKind) {
                     ForEach(cloudKinds) { Text($0.displayName).tag($0) }
                 }
+                // The draft is already saved keystroke by keystroke, so switching providers only has
+                // to reload -- saving here would write the old provider's key under the new one.
                 .onChange(of: selectedKind) { _, _ in loadForSelection() }
+            } header: {
+                helpHeader("Provider", "Credentials and model for each cloud provider. Configuring one does not select it -- that is the Engine picker above.")
             }
 
             Section("Connection") {
                 if selectedKind.requiresAPIKey {
                     LabeledContent("API key") {
+                        // Saved as it is typed. Every other control here saves itself, and neither
+                        // onSubmit nor onDisappear fires when the window is simply closed -- a key
+                        // typed and left behind used to be discarded silently.
                         SecureField("", text: $apiKeyDraft)
                             .labelsHidden()
                             .textFieldStyle(.plain)
                             .darkField()
-                    }
-                    Button("Save key") {
-                        appState.setAPIKey(apiKeyDraft, for: selectedKind)
+                            .onChange(of: apiKeyDraft) { _, _ in saveKey(for: selectedKind) }
                     }
                 }
                 LabeledContent("Base URL") {
-                    TextField("", text: Binding(
+                    TextField("", text: deferredWrite(Binding(
                         get: { configBinding.wrappedValue.baseURLOverride ?? "" },
                         set: { var c = configBinding.wrappedValue; c.baseURLOverride = $0.isEmpty ? nil : $0; configBinding.wrappedValue = c }
-                    ), prompt: Text(selectedKind.defaultBaseURL ?? ""))
+                    )), prompt: Text(selectedKind.defaultBaseURL ?? ""))
                     .labelsHidden()
                     .textFieldStyle(.plain)
                     .darkField()
@@ -59,10 +72,10 @@ struct ProvidersSettingsView: View {
 
                 LabeledContent("Model") {
                     HStack {
-                        TextField("", text: Binding(
+                        TextField("", text: deferredWrite(Binding(
                             get: { configBinding.wrappedValue.model },
                             set: { var c = configBinding.wrappedValue; c.model = $0; configBinding.wrappedValue = c }
-                        ))
+                        )))
                         .labelsHidden()
                         .textFieldStyle(.plain)
                         .darkField()
@@ -99,90 +112,47 @@ struct ProvidersSettingsView: View {
                 }
             }
 
-            if appState.settings.correctEnabled {
-                Section {
-                    LabeledContent("Server URL") {
-                        TextField("", text: $appState.settings.languageToolBaseURL,
-                                  prompt: Text("https://api.languagetool.org/v2"))
-                            .labelsHidden().textFieldStyle(.plain).darkField()
-                    }
-                    LabeledContent("Language") {
-                        Picker("", selection: $appState.settings.languageToolLanguage) {
-                            Text("Auto Detect").tag(AppLanguages.autoTag)
-                            ForEach(AppLanguages.list, id: \.code) { Text($0.name).tag($0.code) }
-                        }
-                        .labelsHidden().fixedSize()
-                    }
-                    LabeledContent("Username / email") {
-                        TextField("", text: $appState.settings.languageToolUsername)
-                            .labelsHidden().textFieldStyle(.plain).darkField()
-                    }
-                    LabeledContent("API token") {
-                        SecureField("", text: $ltTokenDraft)
-                            .labelsHidden().textFieldStyle(.plain).darkField()
-                    }
-                    Button("Save token") { appState.setLanguageToolToken(ltTokenDraft) }
-                    HStack {
-                        Button(ltTesting ? "Testing…" : "Test connection") { testLanguageTool() }
-                            .disabled(ltTesting)
-                        if let ltOK {
-                            Image(systemName: ltOK ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(ltOK ? .green : .red)
-                        }
-                    }
-                    if !ltStatus.isEmpty {
-                        Text(ltStatus).font(.caption).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    helpHeader("Correct (LanguageTool)", "Username and token are only for LanguageTool Premium; the public and self-hosted servers need just the URL. The public server is rate-limited and sends text to languagetool.org.")
-                }
-            }
         }
         .formStyle(.grouped)
         .clearFocusOnAppear()
         .onAppear { loadForSelection() }
+        .onDisappear {
+            saveKey(for: selectedKind)
+            // A verdict must not survive a tab switch, and an in-flight test must not surface later.
+            testTask?.cancel()
+            testTask = nil
+            isTesting = false
+            testStatus = ""
+            testOK = nil
+        }
+    }
+
+    private func saveKey(for kind: ProviderKind) {
+        guard kind.requiresAPIKey, apiKeyDraft != appState.apiKey(for: kind) else { return }
+        appState.setAPIKey(apiKeyDraft, for: kind)
     }
 
     private func loadForSelection() {
         apiKeyDraft = appState.apiKey(for: selectedKind)
-        ltTokenDraft = appState.languageToolToken()
         models = []
         testStatus = ""
         testOK = nil
     }
 
-    private func testLanguageTool() {
-        appState.setLanguageToolToken(ltTokenDraft)
-        ltTesting = true
-        ltStatus = ""
-        ltOK = nil
-        let engine = EngineFactory.makeLanguageTool(appState: appState)
-        Task {
-            do {
-                ltStatus = try await engine.testConnection()
-                ltOK = true
-            } catch {
-                ltStatus = error.localizedDescription
-                ltOK = false
-            }
-            ltTesting = false
-        }
-    }
-
     private func testConnection() {
-        if selectedKind.requiresAPIKey {
-            appState.setAPIKey(apiKeyDraft, for: selectedKind)
-        }
+        saveKey(for: selectedKind)
         isTesting = true
         testStatus = ""
         testOK = nil
         let engine = EngineFactory.make(kind: selectedKind, appState: appState)
-        Task {
+        testTask = Task {
             do {
                 let status = try await engine.testConnection()
+                guard !Task.isCancelled else { return }
                 testOK = true
                 testStatus = status
             } catch {
+                guard !Task.isCancelled else { return }
                 testOK = false
                 testStatus = error.localizedDescription
             }
@@ -191,9 +161,7 @@ struct ProvidersSettingsView: View {
     }
 
     private func fetchModels() {
-        if selectedKind.requiresAPIKey {
-            appState.setAPIKey(apiKeyDraft, for: selectedKind)
-        }
+        saveKey(for: selectedKind)
         let config = appState.settings.provider(selectedKind)
         let engine = OpenAICompatibleEngine(
             baseURL: config.effectiveBaseURL,

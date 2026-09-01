@@ -52,9 +52,13 @@ final class AppState: ObservableObject {
         KeychainStore.get(account: Self.languageToolAccount) ?? ""
     }
 
-    func setLanguageToolToken(_ value: String) {
+    /// Stores the token. `reconfigure` re-emits `settings` so observers (the hotkey coordinator,
+    /// which rebuilds the LanguageTool engine) pick the new token up -- the token lives in the
+    /// Keychain, not in `settings`, so they would not otherwise learn it changed. Pass `false` while
+    /// the user is still typing it, and once more with `true` when the field is done.
+    func setLanguageToolToken(_ value: String, reconfigure: Bool = true) {
         KeychainStore.set(value, account: Self.languageToolAccount)
-        objectWillChange.send()
+        if reconfigure { settings = settings }
     }
 
     // MARK: - Provider config helpers
