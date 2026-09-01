@@ -8,6 +8,3 @@ xcuserdata/
 
 # Swift
 .build/
-
-# Local tooling state
-.reasonix/
