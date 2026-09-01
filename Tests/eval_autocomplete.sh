@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 VARIANT="${1:-baseline}"
 WARM="${2:-cold}"
 LIMIT="${3:-5}"
-BIGRAM="${4:-BindAll/Autocomplete/ru_bigrams.txt}"
+BIGRAM="${4:-BindAll/Autocomplete/ru_bigrams_ctx.txt}"
 TRIGRAM="${5:-}"
 
 OUT="$(mktemp -d)/EvalAutocomplete"

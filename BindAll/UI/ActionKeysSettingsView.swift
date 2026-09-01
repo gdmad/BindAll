@@ -27,6 +27,17 @@ struct ActionKeysSettingsView: View {
                                              others: otherShortcuts(excluding: key.id))
                         }
 
+                        HStack(spacing: 8) {
+                            Text("Name").foregroundStyle(.secondary)
+                            TextField("", text: deferredWrite(binding(for: key.id).label),
+                                      prompt: Text("What this key does"))
+                                .labelsHidden()
+                                .textFieldStyle(.plain)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .darkField()
+                        }
+
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Instruction").foregroundStyle(.secondary)
                             TextField("", text: deferredWrite(binding(for: key.id).prompt),
@@ -54,7 +65,9 @@ struct ActionKeysSettingsView: View {
                     HStack(spacing: 8) {
                         Text(key.key.isEmpty ? "—" : key.key)
                             .font(.system(.body, design: .monospaced)).bold()
-                        Text(key.prompt)
+                        // The name if there is one -- the built-in keys ship with good ones -- and
+                        // the instruction itself otherwise.
+                        Text(key.label.isEmpty ? key.prompt : key.label)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)

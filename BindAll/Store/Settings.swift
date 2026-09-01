@@ -151,14 +151,16 @@ enum PopupLayout: String, Codable, CaseIterable {
     /// Horizontal movement walks the row-major order and wraps; vertical movement steps a whole row
     /// (columns) and clamps at the ends. `topRowCount` overrides the column count with the number of
     /// items actually placed on the first row (a width-measured split); 0 falls back to the even
-    /// `tileColumns` split.
+    /// `tileColumns` split. When everything fits on one row there is no second row to move to, so
+    /// vertical movement does nothing rather than jumping to the far end of the single row.
     static func tileIndex(from index: Int, deltaX: Int, deltaY: Int, count: Int,
                           topRowCount: Int = 0) -> Int {
         guard count > 0 else { return 0 }
         let clamped = max(0, min(index, count - 1))
         if deltaX != 0 { return (clamped + deltaX + count) % count }
         if deltaY != 0 {
-            let columns = topRowCount > 0 ? topRowCount : tileColumns(forCount: count)
+            let columns = topRowCount > 0 ? min(topRowCount, count) : tileColumns(forCount: count)
+            guard columns < count else { return clamped }
             return max(0, min(count - 1, clamped + deltaY * columns))
         }
         return clamped
@@ -196,9 +198,8 @@ struct Settings: Codable, Equatable {
     var autocompleteAppMode: String = "all"   // "all" | "allow" | "deny"
     var autocompleteApps: [String] = []       // bundle identifiers for allow/deny
 
-    // Proofread behaviour. Whether it runs at all, its shortcut, the server and the language come
-    // from the Correct settings below: it is the same action, reworked to step through the issues
-    // instead of applying them all blindly.
+    // Proofread behaviour. Whether it runs at all, the server and the language come from the
+    // LanguageTool settings below; there is no shortcut, it checks as you type.
     var proofreadMaxReplacements: Int = 3      // fixes listed per issue (1...10)
     var proofreadLayout: PopupLayout = .column // how the fixes are arranged in the popup
     var proofreadMinLength: Int = 12           // shortest text worth checking
@@ -218,18 +219,17 @@ struct Settings: Codable, Equatable {
     var correctEnabled: Bool = false
     var languageToolMode: LanguageToolMode = .free
     var languageToolBaseURL: String = "https://api.languagetool.org/v2"  // used only in self-hosted mode
-    var languageToolUsername: String = ""           // Premium / self-hosted with auth (account email)
+    var languageToolUsername: String = ""           // Premium account email
     var languageToolLanguage: String = "auto"        // BCP-47 code or "auto"
 
     /// The base URL, username and apiKey to actually put on the wire, resolved from the mode.
-    /// Free never sends credentials (the public server rejects them); Premium always does; self-hosted
-    /// sends them only if provided. `token` is read from the Keychain by the caller.
+    /// Only Premium sends credentials: the public server rejects them, and a self-hosted server is
+    /// reached by URL alone. `token` is read from the Keychain by the caller.
     func languageToolConnection(token: String) -> (baseURL: String, username: String, apiKey: String) {
         switch languageToolMode {
-        case .free:
-            // The public server rejects credentials, so never send them regardless of the fields.
+        case .free, .selfHosted:
             return (languageToolBaseURL, "", "")
-        case .premium, .selfHosted:
+        case .premium:
             return (languageToolBaseURL, languageToolUsername, token)
         }
     }

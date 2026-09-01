@@ -24,23 +24,40 @@ struct ProvidersSettingsView: View {
 
     var body: some View {
         Form {
+            // The engine that actually runs, and below it the credentials for each provider: the
+            // two used to live on different tabs, which read as if they were unrelated.
+            Section {
+                Picker("Engine for text actions", selection: $appState.settings.defaultEngine) {
+                    ForEach(ProviderKind.allCases) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+            } header: {
+                helpHeader("Engine", "Used for the default action and custom prompts. Translation always runs on-device via Apple's Translation framework, and proofreading always uses LanguageTool.")
+            }
+
             Section {
                 Picker("Provider", selection: $selectedKind) {
                     ForEach(cloudKinds) { Text($0.displayName).tag($0) }
                 }
+                // The draft is already saved keystroke by keystroke, so switching providers only has
+                // to reload -- saving here would write the old provider's key under the new one.
                 .onChange(of: selectedKind) { _, _ in loadForSelection() }
+            } header: {
+                helpHeader("Provider", "Credentials and model for each cloud provider. Configuring one does not select it -- that is the Engine picker above.")
             }
 
             Section("Connection") {
                 if selectedKind.requiresAPIKey {
                     LabeledContent("API key") {
+                        // Saved as it is typed. Every other control here saves itself, and neither
+                        // onSubmit nor onDisappear fires when the window is simply closed -- a key
+                        // typed and left behind used to be discarded silently.
                         SecureField("", text: $apiKeyDraft)
                             .labelsHidden()
                             .textFieldStyle(.plain)
                             .darkField()
-                    }
-                    Button("Save key") {
-                        appState.setAPIKey(apiKeyDraft, for: selectedKind)
+                            .onChange(of: apiKeyDraft) { _, _ in saveKey(for: selectedKind) }
                     }
                 }
                 LabeledContent("Base URL") {
@@ -72,10 +89,10 @@ struct ProvidersSettingsView: View {
                         }
                 }
                 if !models.isEmpty {
-                    Picker("Available", selection: deferredWrite(Binding(
+                    Picker("Available", selection: Binding(
                         get: { configBinding.wrappedValue.model },
                         set: { var c = configBinding.wrappedValue; c.model = $0; configBinding.wrappedValue = c }
-                    ))) {
+                    )) {
                         ForEach(models, id: \.self) { Text($0).tag($0) }
                     }
                 }
@@ -100,6 +117,7 @@ struct ProvidersSettingsView: View {
         .clearFocusOnAppear()
         .onAppear { loadForSelection() }
         .onDisappear {
+            saveKey(for: selectedKind)
             // A verdict must not survive a tab switch, and an in-flight test must not surface later.
             testTask?.cancel()
             testTask = nil
@@ -107,6 +125,11 @@ struct ProvidersSettingsView: View {
             testStatus = ""
             testOK = nil
         }
+    }
+
+    private func saveKey(for kind: ProviderKind) {
+        guard kind.requiresAPIKey, apiKeyDraft != appState.apiKey(for: kind) else { return }
+        appState.setAPIKey(apiKeyDraft, for: kind)
     }
 
     private func loadForSelection() {
@@ -117,9 +140,7 @@ struct ProvidersSettingsView: View {
     }
 
     private func testConnection() {
-        if selectedKind.requiresAPIKey {
-            appState.setAPIKey(apiKeyDraft, for: selectedKind)
-        }
+        saveKey(for: selectedKind)
         isTesting = true
         testStatus = ""
         testOK = nil
@@ -140,9 +161,7 @@ struct ProvidersSettingsView: View {
     }
 
     private func fetchModels() {
-        if selectedKind.requiresAPIKey {
-            appState.setAPIKey(apiKeyDraft, for: selectedKind)
-        }
+        saveKey(for: selectedKind)
         let config = appState.settings.provider(selectedKind)
         let engine = OpenAICompatibleEngine(
             baseURL: config.effectiveBaseURL,

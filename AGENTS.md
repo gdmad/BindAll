@@ -26,7 +26,8 @@ BindAll/
 │   └── AccessibilityPermission.swift
 ├── Selection/
 │   ├── SelectionReader.swift   # Reads selection from the pasteboard (AX attribute fallback)
-│   └── TextInjector.swift      # Sets pasteboard + synthesizes Cmd+V; copy helper
+│   ├── TextInjector.swift      # Sets pasteboard + synthesizes Cmd+V; copy helper
+│   └── InjectedEvents.swift    # Marks/detects BindAll's own synthetic keys, so proofread/autocomplete ignore each other's writes
 ├── Engines/
 │   ├── AIEngine.swift          # protocol + EngineError
 │   ├── AppleFoundationEngine.swift   # FoundationModels on-device LLM (temperature 0)
@@ -39,11 +40,11 @@ BindAll/
 │   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word; Mode (baseline/context/semantic) + scorer re-ranking
 │   ├── AutocompleteController.swift   # two CGEventTaps on own thread (listen-only monitor + active suppressor); AX/keystroke word; suggestions, next-word, accept
 │   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed; contextScore() ranks completions by preceding words (thread-safe)
+│   ├── LearnedWordAudit.swift         # pure: which learned words look like typos (dictionary check comes in as a closure)
 │   ├── SemanticRanker.swift           # experimental: NLContextualEmbedding (Cyrillic) cosine re-ranking, debug-only
-│   ├── ru_bigrams.txt                 # RU bigram seed for next-word only (Google Books, CC BY 3.0) -- frozen
-│   ├── ru_bigrams_ctx.txt             # RU context bigram seed (Leipzig news, CC BY 4.0) for completion ranking
-│   ├── ru_trigrams.txt                # RU context trigram seed (Leipzig news, CC BY 4.0) for completion ranking
-│   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret
+│   ├── ru_bigrams_ctx.txt             # RU bigram seed (Leipzig news, CC BY 4.0) -- feeds both next-word and completion ranking
+│   ├── ru_trigrams.txt                # RU trigram seed (Leipzig news, CC BY 4.0) for completion ranking
+│   └── AutocompleteOverlay.swift      # non-activating floating list shown near the caret (PopupKit)
 ├── Proofread/                  # step through LanguageTool's findings one at a time
 │   ├── TextIssue.swift                # shared issue model (UTF-16 ranges, stable ids)
 │   ├── IssueMerger.swift              # merge/shift/context-checked relocate/firstIssue -- pure range algebra
@@ -53,21 +54,26 @@ BindAll/
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
 │   ├── IssueApplier.swift             # validated single fix: AX write, else verified select+paste
 │   ├── WordBoundary.swift             # word range under the caret (click-to-proofread trigger)
-│   ├── UnderlineGeometry.swift        # pure geometry: rect flip, squiggle path, line check
+│   ├── UnderlineGeometry.swift        # pure geometry: rect flip, squiggle path, underline drop, line check
+│   ├── IssueKindStyle.swift           # one source of truth for issue-kind color and symbol
+│   ├── RecheckPolicy.swift            # pure: whether the post-write pass re-checks (defers to a click's check)
 │   ├── UnderlineOverlay.swift         # click-through panel with squiggles under all found issues
-│   ├── ProofreadDiagnostics.swift     # menu-bar report: what AX exposes for the focused field
-│   ├── ProofreadSupport.swift         # hand-curated table of apps proofread is verified in
 │   └── ProofreadController.swift      # session, key tap (only while the popup is up), click popup
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
 │   └── MaskAISlop.swift        # typography normalizer (dashes/quotes/emoji)
 ├── UI/
-│   ├── SettingsView.swift      # tabs: General, Actions, Providers, Autocomplete, Proofread (Translation and Shortcuts live inside General/Actions)
-│   ├── AutocompleteSettingsView.swift  # autocomplete tab (count, layout, language, learning, per-app)
+│   ├── SettingsView.swift      # tabs: General, Actions, Translation, Autocomplete, Proofread, Providers (each feature owns its tab, including its on/off switch)
+│   ├── AutocompleteSettingsView.swift  # autocomplete tab (on/off, count, layout, language, learning, per-app)
+│   ├── ProofreadSettingsView.swift     # proofread tab (on/off, fixes, layout, language, per-app)
+│   ├── AppFilterSection.swift          # shared per-app allow/deny section (autocomplete + proofread)
 │   ├── ActionKeysSettingsView.swift
-│   ├── ProvidersSettingsView.swift     # AI providers (keys, models)
+│   ├── ProvidersSettingsView.swift     # engine picker + AI providers (keys, models)
 │   ├── LanguageToolConnectionSection.swift # LT mode/URL/credentials block on the Proofread tab
+│   ├── PopupKit.swift          # shared popup chrome/cell/panel/placement for both floating popups
+│   ├── PopupTilePacker.swift   # pure: how many cells fit the tile's first row
+│   ├── ProofreadPopover.swift  # the fixes popup (PopupKit)
 │   ├── HistoryPanelView.swift  # History list shown as a popover from the menu bar (click = copy)
 │   └── PopupController.swift   # floating NSPanel for translation/results (Copy/Close)
 └── Store/
@@ -75,16 +81,13 @@ BindAll/
     ├── ActionKey.swift         # {key, label, prompt, hotkey?}; built-in w / u / l / о / гг
     ├── KeychainStore.swift     # API keys (generic password)
     └── LoginItemManager.swift  # SMAppService launch-at-login
-docs/
-└── proofread-app-testing.md    # the per-app pass to run before adding to ProofreadSupport
 Tests/
-├── main.swift                  # PromptParser + MaskAISlop assertions (no XCTest host needed)
+├── main.swift                  # pure-logic assertions across actions, settings, proofread, popups (no XCTest host needed)
 ├── run_tests.sh
 ├── eval_autocomplete.sh        # autocomplete ranking evaluator (hit@1/hit@3/MRR per prefix)
 ├── eval_autocomplete.swift     # harness: RU corpus, cold/warm store, baseline|context|semantic modes
 ├── gen_ru_ngrams.py            # rebuilds ru_bigrams_ctx.txt / ru_trigrams.txt from a sentence corpus
-├── ru_eval_corpus.txt          # 105 RU sentences (80 hand-written + 25 Leipzig news) used by the evaluator
-└── eval_results.md             # experiment results: baseline vs variants A/B/C, winner = context ranking
+└── ru_eval_corpus.txt          # 105 RU sentences (80 hand-written + 25 Leipzig news) used by the evaluator
 Info.plist                      # LSUIElement, version (source of truth for version)
 ```
 
@@ -93,7 +96,7 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Cmd+C ×3** → translate the selection, shown in a popup near the cursor
 - **Cmd+E** → OCR: select a screen region, recognize text, translate
 - **Shift+Cmd+E** → Quick Translate window
-- **Proofread** (LanguageTool), only when enabled in Settings → General, has **no shortcut**: a
+- **Proofread** (LanguageTool), only when enabled on Settings → Proofread, has **no shortcut**: a
   pause in typing (~0.6 s) re-checks the focused field and underlines every issue in place
   (squiggles; spelling is red, grammar yellow, punctuation green, style blue -- LanguageTool's own
   palette). Clicking an
@@ -101,31 +104,35 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   popup: arrows or mouse hover choose a fix (the column layout uses up/down for fixes and
   left/right for problem words, the line swaps them, and the tile uses both axes for fixes), Return
   or a click applies it, Tab steps between problem words (wrapping around), Esc closes it (the
-  underlines stay). Both popups take their text size from Settings → General, and their layout
+  underlines stay). Both popups share `UI/PopupKit.swift` (system-menu look: material panel, standard
+  selection pill, no zoom or animation; honours Reduce Transparency and Differentiate Without Color),
+  take their text size from Settings → General, and their layout
   (Column / Line / Tile -- two rows) from their own setting, shared with autocomplete. The number of fixes listed per issue is a setting
   (1-10, default 3). Underlines follow scrolling and window moves, go down while typing and come
   back with the fresh result, and disappear on an app switch. Apps that expose no word coordinates
   (many Electron/web fields) get no underlines; the popup still works if their text is readable.
   Chromium-based apps only build an accessibility tree when asked, so `ProofreadAX` sets
   `AXManualAccessibility` on the frontmost process once (`enableElectronAccessibilityIfNeeded`).
-  «Proofread diagnostics…» in the menu bar reports what Accessibility exposes for a given field.
-  The Proofread tab's "Supported apps" section lists the apps the feature has actually been verified in; that list is
-  `ProofreadSupport.verified` and is extended by hand after testing an app, never automatically --
-  the pass to run before adding one is `docs/proofread-app-testing.md`.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
-- **Word autocomplete** (off by default; enable on General, configure on the Autocomplete
-  tab): as you type, a list of case-matched completions appears near the caret; arrow keys choose,
+- **Word autocomplete** (off by default; enable and configure on the Autocomplete tab): as you type, a list of case-matched completions appears near the caret; arrow keys choose,
   **Tab** (and optionally Return) inserts; any other key, a click anywhere, or leaving the app
   dismisses it. Completions are **ranked by the preceding words** (the "Rank by context" setting,
   default on): `AutocompleteLearningStore.contextScore` interpolates learned trigram > learned
   bigram > bundled RU trigram/bigram seeds > personal frequency, and the pool (learned + dictionary
-  completions, up to 30) is re-ranked by that score -- this was validated by an experiment
-  (`Tests/eval_autocomplete.sh`, results in `Tests/eval_results.md`; next-word prediction is
-  deliberately frozen and does not use the context seeds). It can predict the next word after a
-  space and learn the words you use (local
+  completions, up to 30) is re-ranked by that score -- this was validated by an experiment, run with
+  `Tests/eval_autocomplete.sh` (context beat baseline and a semantic-embedding variant on hit@1/MRR
+  against `Tests/ru_eval_corpus.txt`). It can predict the next word
+  after a space: the context (up to two preceding words) is read from the focused field via AX where
+  one is exposed, the same way the current word is ranked, so it also works after clicking back into
+  a sentence or returning from another app -- not only mid-typing-run, which is all the keystroke
+  buffer (`prevWord`/`prevWord2`, used as the fallback when AX exposes no text) can see. It also
+  learns the words you use (local
   `AutocompleteLearningStore`): a word is learned when a space or punctuation closes it, and when a
   suggestion is accepted. Return deliberately does not learn (it submits password fields).
+  Learned words can be reviewed: the "Learned words" sheet flags every word the dictionary does
+  not know (`LearnedWordAudit`, pinned words exempt) and can drop them in one go -- anything typed
+  twice gets learned, typos included.
   Configurable: count, column/line/tile layout, text
   size, dictionary language, and per-app allow/deny. Uses AX text+caret where available, otherwise a
   keystroke buffer (works in most apps). Skipped in password fields and BindAll's own windows.
@@ -144,7 +151,7 @@ shortcuts and Correct are not copy shortcuts, so they synthesize Cmd+C first
 count for that key is reached (only counts with a larger sibling wait out the time window).
 
 ## Engines
-- **Engine for text actions** (`Settings → General`): Apple on-device, DeepSeek, OpenRouter, OpenAI,
+- **Engine for text actions** (`Settings → Providers`): Apple on-device, DeepSeek, OpenRouter, OpenAI,
   or Ollama. Cloud providers share one OpenAI-compatible client (`/chat/completions`).
 - **Translation is always on-device** via Apple's `Translation` framework, regardless of the chosen
   engine. It uses a two-language pair (primary/secondary) and translates into whichever the source is
@@ -160,9 +167,10 @@ count for that key is reached (only counts with a larger sibling wait out the ti
   The connection is configured on the Proofread tab via an explicit **connection mode**
   (`LanguageToolMode`): **Free public** (`api.languagetool.org`, no credentials -- the public server
   rejects them with HTTP 400), **Premium** (`api.languagetoolplus.com`, a different host, requires
-  username + token), or **Self-hosted** (your own URL, optional credentials).
-  `Settings.languageToolConnection(token:)` resolves the real endpoint and only puts credentials on
-  the wire where they belong; `LanguageToolEngine.authParams` is a final guard that never sends a
+  username + token), or **Self-hosted** (your own URL, no credentials -- the server is reached by URL
+  alone, so the tab shows no username or token fields for it).
+  `Settings.languageToolConnection(token:)` resolves the real endpoint and puts credentials on the
+  wire for Premium only; `LanguageToolEngine.authParams` is a final guard that never sends a
   lone username or apiKey. The Premium token lives in the Keychain. The URL is pre-filled per mode
   but stays editable; there is no settings migration (mode defaults to Free).
 - **Writing results back:** the frontmost app is captured when an action starts; the result is pasted

@@ -8,7 +8,7 @@ Russian news corpus (https://wortschatz.uni-leipzig.de, rus_news_2023, CC BY 4.0
 used to generate the shipped files.
 
 Output (tab-separated, counts = total occurrences across the corpus, sorted by count descending):
-  <outdir>/ru_bigrams_v2.txt   prev \t next \t count            (top N bigrams)
+  <outdir>/ru_bigrams_ctx.txt   prev \t next \t count            (top N bigrams)
   <outdir>/ru_trigrams.txt     prev2 \t prev1 \t next \t count  (top N trigrams)
 
 Tokens: contiguous letter runs (Cyrillic + Latin), lowercased, e/yo kept as typed ("е" and "ё"
@@ -57,7 +57,7 @@ def main() -> None:
 
     import os
     os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "ru_bigrams_v2.txt"), "w", encoding="utf-8") as f:
+    with open(os.path.join(outdir, "ru_bigrams_ctx.txt"), "w", encoding="utf-8") as f:
         for (p, n), c in bigrams.most_common(top_bigrams):
             f.write(f"{p}\t{n}\t{c}\n")
     with open(os.path.join(outdir, "ru_trigrams.txt"), "w", encoding="utf-8") as f:

@@ -10,6 +10,11 @@ enum UnderlineGeometry {
                width: rect.width, height: rect.height)
     }
 
+    /// How far below a word's rect the squiggle hangs. The AX bounds of a word include its
+    /// descenders, so a squiggle drawn on the bottom edge cuts through them; this drops it clear of
+    /// the text. AppKit coordinates (y grows upward), so it is subtracted from the rect's minY.
+    static let underlineDrop: CGFloat = 3
+
     /// Zigzag vertices spanning x in [0, width], y alternating between 0 and amplitude.
     /// Degenerate widths yield just the two endpoints.
     static func squigglePoints(width: CGFloat, amplitude: CGFloat, wavelength: CGFloat) -> [CGPoint] {

@@ -83,7 +83,7 @@ struct EvalMain {
         let warm = args[3] == "warm"
         let limit = args.count > 4 ? (Int(args[4]) ?? 5) : 5
         let bigramSeed = args.count > 5 ? URL(fileURLWithPath: args[5])
-                                         : URL(fileURLWithPath: "BindAll/Autocomplete/ru_bigrams.txt")
+                                         : URL(fileURLWithPath: "BindAll/Autocomplete/ru_bigrams_ctx.txt")
         let trigramSeed = args.count > 6 && !args[6].isEmpty ? URL(fileURLWithPath: args[6]) : nil
 
         guard let corpusText = try? String(contentsOf: corpusURL, encoding: .utf8) else {
@@ -95,12 +95,12 @@ struct EvalMain {
             .filter { !$0.hasPrefix("#") && !$0.trimmingCharacters(in: .whitespaces).isEmpty }
 
         // Isolated learning store: temp file, explicit seeds so the CLI sees the same data the app
-        // bundles. The bigram arg feeds the *context* seed table (the next-word seed is frozen and
-        // not exercised by this evaluator); the optional trigram arg adds the rich-data level.
+        // bundles. The bigram arg feeds the one seed table that serves both next-word and the
+        // context-score level; the optional trigram arg adds the rich-data level.
         let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("bindall-eval-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         let store = AutocompleteLearningStore(fileURL: tmpDir.appendingPathComponent("store.json"),
-                                              contextSeedURL: bigramSeed, trigramSeedURL: trigramSeed)
+                                              seedURL: bigramSeed, trigramSeedURL: trigramSeed)
 
         if warm {
             for line in sentences {

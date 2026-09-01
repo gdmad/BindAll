@@ -200,6 +200,28 @@ enum AutocompleteEngine {
         return Array(result.prefix(limit))
     }
 
+    /// Whether the dictionary knows `word`, in any of `languages` (empty = the auto-detected one).
+    /// Used by the learned-word review to tell typos from real words. Like the rest of the
+    /// `NSSpellChecker` work here, call it off the main thread: it is not cheap, and the review runs
+    /// it over the whole learned vocabulary.
+    static func isKnownWord(_ word: String, languages: [String]) -> Bool {
+        let checker = NSSpellChecker.shared
+        let langs: [String]
+        if languages.isEmpty {
+            checker.automaticallyIdentifiesLanguages = true
+            langs = [checker.language()]
+        } else {
+            langs = languages
+        }
+        for lang in langs {
+            let misspelled = checker.checkSpelling(of: word, startingAt: 0, language: lang,
+                                                   wrap: false, inSpellDocumentWithTag: 0,
+                                                   wordCount: nil)
+            if misspelled.location == NSNotFound { return true }
+        }
+        return false
+    }
+
     /// Recases `candidate` to match the case pattern of `partial`: ALL CAPS, Capitalized first letter,
     /// or the candidate's own (dictionary) case for lowercase / mixed input.
     static func recased(_ candidate: String, like partial: String) -> String {

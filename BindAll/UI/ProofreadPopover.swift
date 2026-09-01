@@ -5,21 +5,30 @@ import SwiftUI
 ///
 /// Like `AutocompleteOverlay`, this must never take focus: the user's text field stays key so the
 /// selection stays visible and the fix lands where they are typing. So: non-activating panel,
-/// `orderFront` rather than `makeKey`, and no `NSApp.activate` anywhere.
+/// `orderFront` rather than `makeKey`, and no `NSApp.activate` anywhere. The chrome, the cells and
+/// the placement come from `PopupKit`, shared with the autocomplete popup.
 @MainActor
 final class ProofreadPopover {
     private var panel: NSPanel?
+    /// How many fixes the last tile presentation put on its first row (0 = not a tile / even split).
+    /// The controller reads it so vertical arrow navigation jumps by the real column count.
+    private(set) var lastTileTopCount = 0
 
     /// Shows `issue`'s fixes with `selected` highlighted, placed above `anchor` -- the word's rect in
     /// AppKit screen coordinates. `onHover`/`onAccept` receive the row index the mouse is on.
     func show(issue: TextIssue, selected: Int, position: String, anchor: CGRect, layout: PopupLayout,
               fontSize: CGFloat, onHover: @escaping (Int) -> Void, onAccept: @escaping (Int) -> Void) {
+        let topCount = layout == .tile
+            ? PopupTile.topRowCount(for: issue.replacements, fontSize: fontSize,
+                                    near: NSPoint(x: anchor.minX, y: anchor.maxY))
+            : 0
+        lastTileTopCount = topCount
         let view = PopoverView(title: issue.shortMessage.isEmpty ? issue.message : issue.shortMessage,
-                               original: issue.original,
                                kind: issue.kind,
                                replacements: issue.replacements,
                                selected: selected,
                                layout: layout,
+                               tileTopCount: topCount,
                                position: position,
                                fontSize: fontSize,
                                onHover: onHover,
@@ -29,6 +38,7 @@ final class ProofreadPopover {
 
     /// A one-line notice (checking, no issues, server error) in the same place as the list.
     func showMessage(_ text: String, anchor: CGRect, fontSize: CGFloat, spinner: Bool = false) {
+        lastTileTopCount = 0
         present(AnyView(MessageView(text: text, fontSize: fontSize, spinner: spinner)), above: anchor)
     }
 
@@ -43,46 +53,14 @@ final class ProofreadPopover {
         panel.layoutIfNeeded()
         let size = host.fittingSize
         panel.setContentSize(size)
-        panel.setFrameOrigin(origin(for: size, above: anchor))
+        panel.setFrameOrigin(PopupPlacement.origin(above: anchor, size: size))
         panel.orderFront(nil) // NOT makeKey: the text field must keep focus.
     }
 
-    /// Sits above the word, so the popup never covers what it is about; drops below it only when
-    /// there is no room above (a problem word on the top line of the screen).
-    private func origin(for size: NSSize, above anchor: CGRect) -> NSPoint {
-        let gap: CGFloat = 6
-        let screen = NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? .zero
-        let above = anchor.maxY + gap
-        let below = anchor.minY - gap - size.height
-        let y = (above + size.height <= visible.maxY - 4 || below < visible.minY + 4) ? above : below
-        return clamp(NSPoint(x: anchor.minX, y: y), size: size)
-    }
-
     private func makePanel() -> NSPanel {
-        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
-                            backing: .buffered, defer: true)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .floating
-        panel.ignoresMouseEvents = false // rows accept hover and click-to-apply
-        panel.hidesOnDeactivate = false
-        panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        let panel = PopupPanel.make(ignoresMouseEvents: false) // rows accept hover and click-to-apply
         self.panel = panel
         return panel
-    }
-
-    /// Keeps the popup on the screen holding it.
-    private func clamp(_ origin: NSPoint, size: NSSize) -> NSPoint {
-        let probe = NSPoint(x: origin.x, y: origin.y + size.height / 2)
-        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(probe) }) ?? NSScreen.main else {
-            return origin
-        }
-        let v = screen.visibleFrame
-        return NSPoint(x: min(max(origin.x, v.minX + 4), v.maxX - size.width - 4),
-                       y: min(max(origin.y, v.minY + 4), v.maxY - size.height - 4))
     }
 }
 
@@ -96,76 +74,82 @@ private final class FirstMouseHostingView: NSHostingView<AnyView> {
 
 private struct PopoverView: View {
     let title: String
-    let original: String
     let kind: IssueKind
     let replacements: [String]
     let selected: Int
     let layout: PopupLayout
+    /// Fixes on the first row of a tile, measured in `ProofreadPopover.show()`; 0 = even split.
+    let tileTopCount: Int
     /// e.g. "2 of 7"
     let position: String
-    /// Base size for the fix rows; the header and hints sit a couple of points below it.
+    /// Base size for the fix rows; the header sits a couple of points below it.
     let fontSize: CGFloat
     let onHover: (Int) -> Void
     let onAccept: (Int) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 6, height: 6)
-                Text(title)
-                    .font(.system(size: fontSize - 2))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Text(position)
-                    .font(.system(size: fontSize - 3))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, 5)
-            .padding(.top, 3)
-
+        VStack(alignment: .leading, spacing: PopupMetrics.cellSpacing) {
+            header
             if replacements.isEmpty {
-                Text("No suggestions - Tab or arrows for the next word")
+                Text("No suggestions for this word")
                     .font(.system(size: fontSize - 1))
                     .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 5)
-                    .padding(.bottom, 3)
+                    .padding(.horizontal, PopupMetrics.cellPaddingH)
             } else {
                 fixes
-                    .padding(.bottom, 4)
             }
         }
-        .frame(minWidth: 150, maxWidth: 480, alignment: .leading)
-        .padding(4)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary, lineWidth: 1))
-        .fixedSize()
+        .frame(minWidth: PopupMetrics.minWidth, maxWidth: PopupMetrics.maxWidth, alignment: .leading)
+        .popupChrome()
     }
 
-    /// The fixes in the chosen layout: full-width rows in a column, compact chips in a line, and a
-    /// two-row grid of chips in the tile (the grid math matches PopupLayout.tileIndex). Both tile
-    /// rows start at the leading edge -- a shorter second row must not be centered.
+    /// The kind marker, the rule's own wording, and where this word sits among the problems found.
+    /// With "Differentiate Without Color" on, the marker becomes a symbol: the kind must not be
+    /// carried by a colored dot alone.
+    private var header: some View {
+        HStack(spacing: 5) {
+            if PopupAppearance.differentiateWithoutColor {
+                Image(systemName: IssueKindStyle.symbolName(kind))
+                    .font(.system(size: fontSize - 3))
+                    .foregroundStyle(IssueKindStyle.color(kind))
+            } else {
+                Circle().fill(IssueKindStyle.color(kind)).frame(width: 6, height: 6)
+            }
+            Text(title)
+                .font(.system(size: fontSize - 2))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Text(position)
+                .font(.system(size: fontSize - 3))
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, PopupMetrics.cellPaddingH)
+    }
+
+    /// The fixes in the chosen layout: full-width rows in a column, compact cells in a line, and a
+    /// two-row grid in the tile. The tile's split is measured, like the autocomplete popup's, and it
+    /// is the same number arrow navigation steps by. Both tile rows start at the leading edge -- a
+    /// shorter second row must not be centered.
     private var fixes: some View {
         Group {
             switch layout {
             case .column:
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(replacementIndices, id: \.self) { index in
-                        fixRow(index)
-                    }
+                    ForEach(replacementIndices, id: \.self) { cell($0, fillsWidth: true) }
                 }
             case .line:
-                HStack(spacing: 6) {
-                    ForEach(replacementIndices, id: \.self) { chip($0) }
+                HStack(spacing: PopupMetrics.cellSpacing) {
+                    ForEach(replacementIndices, id: \.self) { cell($0) }
                 }
             case .tile:
-                let columns = PopupLayout.tileColumns(forCount: replacements.count)
-                let top = Array(replacementIndices.prefix(columns))
-                let bottom = Array(replacementIndices.dropFirst(columns))
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) { ForEach(top, id: \.self) { chip($0) } }
+                let topCount = tileTopCount > 0 ? tileTopCount : PopupLayout.tileColumns(forCount: replacements.count)
+                let top = Array(replacementIndices.prefix(topCount))
+                let bottom = Array(replacementIndices.dropFirst(topCount))
+                VStack(alignment: .leading, spacing: PopupMetrics.cellSpacing) {
+                    HStack(spacing: PopupMetrics.cellSpacing) { ForEach(top, id: \.self) { cell($0) } }
                     if !bottom.isEmpty {
-                        HStack(spacing: 6) { ForEach(bottom, id: \.self) { chip($0) } }
+                        HStack(spacing: PopupMetrics.cellSpacing) { ForEach(bottom, id: \.self) { cell($0) } }
                     }
                 }
             }
@@ -174,60 +158,12 @@ private struct PopoverView: View {
 
     private var replacementIndices: [Int] { Array(replacements.indices) }
 
-    // Weight is constant so the popup does not resize as the selection moves. The selected row uses
-    // the system selection colors (the same pill macOS menus use), which adapt to light and dark,
-    // and scales up slightly so the chosen fix stands out beyond color alone. Words are never
-    // truncated: a long fix wraps instead of ending in an ellipsis.
-    private func fixRow(_ index: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(replacements[index])
-                .font(.system(size: fontSize))
-                .foregroundStyle(index == selected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
-            Spacer(minLength: 4)
-            if index == selected {
-                Text("Return")
-                    .font(.system(size: fontSize - 3))
-                    .foregroundStyle(Color(nsColor: .selectedMenuItemTextColor).opacity(0.85))
-            }
-        }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 5))
-        .scaleEffect(index == selected ? 1.10 : 1.0)
-        .animation(.easeOut(duration: 0.12), value: index == selected)
-        .contentShape(Rectangle())
-        .onTapGesture { onAccept(index) }
-        // The guard avoids a hover -> re-render -> hover feedback loop.
-        .onHover { inside in if inside && index != selected { onHover(index) } }
-    }
-
-    /// Compact cell for the line and tile layouts, same selection pill as the column rows.
-    private func chip(_ index: Int) -> some View {
-        Text(replacements[index])
-            .font(.system(size: fontSize))
-            .foregroundStyle(index == selected ? Color(nsColor: .selectedMenuItemTextColor) : Color.primary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(index == selected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 5))
-            .scaleEffect(index == selected ? 1.10 : 1.0)
-            .animation(.easeOut(duration: 0.12), value: index == selected)
-            .contentShape(Rectangle())
+    private func cell(_ index: Int, fillsWidth: Bool = false) -> some View {
+        PopupCell(text: replacements[index], isSelected: index == selected, fontSize: fontSize,
+                  fillsWidth: fillsWidth)
             .onTapGesture { onAccept(index) }
+            // The guard avoids a hover -> re-render -> hover feedback loop.
             .onHover { inside in if inside && index != selected { onHover(index) } }
-    }
-
-    /// Matches the underline colors (LanguageTool palette: red spelling, yellow grammar,
-    /// green punctuation, blue style).
-    private var color: Color {
-        switch kind {
-        case .spelling: return .red
-        case .grammar: return .yellow
-        case .punctuation: return .green
-        case .style: return .blue
-        }
     }
 }
 
@@ -244,10 +180,6 @@ private struct MessageView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary, lineWidth: 1))
-        .fixedSize()
+        .popupChrome()
     }
 }

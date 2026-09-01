@@ -41,13 +41,12 @@ final class AutocompleteLearningStore {
     }
 
     private var model = Model()
-    /// Bundled seed bigrams (Russian only, Google Books) used as the final next-word backoff — the
-    /// next-word feature is deliberately frozen, so this table is not touched by the completion
-    /// experiment. Read-only.
+    /// Bundled seed bigrams (Russian only, Leipzig news corpus) -- the same table serves both the
+    /// final next-word backoff and the context-score level for current-word completion ranking.
+    /// A separate Google Books corpus served next-word until it was measured against this one and
+    /// dropped: Leipzig already covers 89% of its keys, is 11x wider, and reads as more current
+    /// ("я" -> "думаю"/"считаю" rather than "и"/"уже"). One file, loaded once. Read-only.
     private var seedBigrams: [String: [String: Int]] = [:]
-    /// Bundled context bigrams (Russian only, Leipzig news corpus) used by the context-score level
-    /// for current-word completion ranking. Read-only.
-    private var seedBigramsContext: [String: [String: Int]] = [:]
     /// Bundled seed trigrams (Russian only, Leipzig news corpus), keyed by `trigramKey(prev2, prev1)`,
     /// used as a stronger context-score level than the seed bigrams. Read-only.
     private var seedTrigrams: [String: [String: Int]] = [:]
@@ -55,7 +54,9 @@ final class AutocompleteLearningStore {
     /// Pending debounced save; guarded by `lock`.
     private var saveDebounce: DispatchWorkItem?
 
-    init(fileURL: URL? = nil, seedURL: URL? = nil, contextSeedURL: URL? = nil, trigramSeedURL: URL? = nil) {
+    private static let log = Logger(subsystem: "com.evgeny.bindall", category: "autocomplete")
+
+    init(fileURL: URL? = nil, seedURL: URL? = nil, trigramSeedURL: URL? = nil) {
         if let fileURL {
             self.fileURL = fileURL
         } else {
@@ -66,14 +67,19 @@ final class AutocompleteLearningStore {
         }
         load()
         // Explicit URLs override the bundle lookups so tests/CLI can point at the same data files.
-        if let url = seedURL ?? Bundle.main.url(forResource: "ru_bigrams", withExtension: "txt") {
+        // Silent by design elsewhere in this class, but a seed failing to load is otherwise
+        // indistinguishable from "the feature just doesn't work" -- log the outcome either way.
+        if let url = seedURL ?? Bundle.main.url(forResource: "ru_bigrams_ctx", withExtension: "txt") {
             seedBigrams = Self.loadBigrams(from: url)
-        }
-        if let url = contextSeedURL ?? Bundle.main.url(forResource: "ru_bigrams_ctx", withExtension: "txt") {
-            seedBigramsContext = Self.loadBigrams(from: url)
+            Self.log.info("loaded \(self.seedBigrams.count) bigram seed keys from \(url.lastPathComponent)")
+        } else {
+            Self.log.warning("ru_bigrams_ctx.txt not found in the bundle; next-word and context ranking lose their seed")
         }
         if let url = trigramSeedURL ?? Bundle.main.url(forResource: "ru_trigrams", withExtension: "txt") {
             seedTrigrams = Self.loadTrigrams(from: url)
+            Self.log.info("loaded \(self.seedTrigrams.count) trigram seed keys from \(url.lastPathComponent)")
+        } else {
+            Self.log.warning("ru_trigrams.txt not found in the bundle; context ranking loses its trigram seed")
         }
     }
 
@@ -193,7 +199,7 @@ final class AutocompleteLearningStore {
                 score += 30.0 * relative(c, to: following.values.max() ?? c)
             }
             if let p1 = prev1?.lowercased(), !p1.isEmpty,
-               let following = seedBigramsContext[p1], let c = following[w] {
+               let following = seedBigrams[p1], let c = following[w] {
                 score += 10.0 * relative(c, to: following.values.max() ?? c)
             }
             if let c = model.wordCounts[w] {

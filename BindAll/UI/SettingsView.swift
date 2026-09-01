@@ -3,18 +3,22 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
 
+    /// Every feature owns one tab, and that tab carries everything about it -- starting with its own
+    /// on/off switch. General is left with what belongs to the app as a whole.
     var body: some View {
         TabView {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
             ActionsSettingsView()
                 .tabItem { Label("Actions", systemImage: "text.badge.checkmark") }
-            ProvidersSettingsView()
-                .tabItem { Label("Providers", systemImage: "cloud") }
+            TranslationSettingsView()
+                .tabItem { Label("Translation", systemImage: "globe") }
             AutocompleteSettingsView()
                 .tabItem { Label("Autocomplete", systemImage: "text.append") }
             ProofreadSettingsView()
                 .tabItem { Label("Proofread", systemImage: "text.magnifyingglass") }
+            ProvidersSettingsView()
+                .tabItem { Label("Providers", systemImage: "cloud") }
         }
         .padding(.top, 8)
         .frame(minWidth: 520, idealWidth: 560, minHeight: 478, idealHeight: 558)
@@ -61,39 +65,17 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Startup") {
+            Section {
+                Toggle(isOn: $appState.settings.enabled) {
+                    helpHeader("BindAll enabled", "The master switch, the same one the menu bar carries. Off: the global shortcuts, autocomplete and proofreading all stand down until it is back on.")
+                }
                 Toggle("Launch at login", isOn: Binding(
                     get: { LoginItemManager.isEnabled },
                     set: { LoginItemManager.apply($0) }
                 ))
-            }
-
-            Section {
-                Picker("Engine for text actions", selection: deferredWrite($appState.settings.defaultEngine)) {
-                    ForEach(ProviderKind.allCases) { kind in
-                        Text(kind.displayName).tag(kind)
-                    }
-                }
             } header: {
-                helpHeader("Engine", "Used for the default action and custom prompts. Translation always runs on-device via Apple's Translation framework.")
+                Text("Startup")
             }
-
-            Section {
-                Toggle(isOn: $appState.settings.correctEnabled) {
-                    helpHeader("Enable Proofread", "Checks the text field you are typing in with a LanguageTool server shortly after you pause, and underlines every issue in place. Click an underlined word to see the fixes (up/down choose a fix, Return applies it, Tab or left/right move to the next problem word, Esc closes). Configure it all on the Proofread tab. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
-                }
-            } header: {
-                Text("Proofread (LanguageTool)")
-            }
-
-            Section {
-                Toggle(isOn: $appState.settings.autocompleteEnabled) {
-                    helpHeader("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Configure it on the Autocomplete tab. Works in most apps; skipped in password fields.")
-                }
-            } header: {
-                Text("Autocomplete")
-            }
-
 
             Section("Output") {
                 Toggle(isOn: $appState.settings.restoreClipboard) {
@@ -126,8 +108,6 @@ struct GeneralSettingsView: View {
             } header: {
                 helpHeader("Status", "Live status. Accessibility is required for the global shortcuts and for pasting results back into the active app. Apple on-device model shows whether Apple Intelligence is available for the on-device engine.")
             }
-
-            TranslationSection()
 
             Section("About") {
                 LabeledContent("Version", value: UpdateChecker.currentVersion)
@@ -188,7 +168,16 @@ struct ActionsSettingsView: View {
 
 // MARK: - Translation
 
-/// Translation options, hosted as a section inside the General tab's Form.
+struct TranslationSettingsView: View {
+    var body: some View {
+        Form {
+            TranslationSection()
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Translation options: the language pair and whether it works offline.
 struct TranslationSection: View {
     @EnvironmentObject var appState: AppState
 
@@ -199,7 +188,7 @@ struct TranslationSection: View {
         Section {
             HStack(spacing: 8) {
                 Text("Source").foregroundStyle(.secondary)
-                languagePicker(selection: deferredWrite($appState.settings.sourceLanguage), includeAuto: true)
+                languagePicker(selection: $appState.settings.sourceLanguage, includeAuto: true)
 
                 Button { swap() } label: { Image(systemName: "arrow.left.arrow.right") }
                     .buttonStyle(.borderless)
@@ -207,7 +196,7 @@ struct TranslationSection: View {
                     .help("Swap source and target")
 
                 Text("Target").foregroundStyle(.secondary)
-                languagePicker(selection: deferredWrite($appState.settings.targetLanguage), includeAuto: false)
+                languagePicker(selection: $appState.settings.targetLanguage, includeAuto: false)
             }
             statusRow
         } header: {

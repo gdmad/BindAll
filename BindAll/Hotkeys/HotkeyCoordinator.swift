@@ -88,8 +88,8 @@ final class HotkeyCoordinator: ObservableObject {
         }
     }
 
-    /// Pushes the current settings into the proofread controller. It is the Correct action reworked,
-    /// so it takes its on/off switch, shortcut, server and language from the Correct settings.
+    /// Pushes the current settings into the proofread controller. It has no shortcut: checking runs
+    /// on its own after a pause in typing, and the fixes open on a click into an underlined word.
     private func updateProofread() {
         let s = appState.settings
         var cfg = ProofreadController.Config()
@@ -338,29 +338,6 @@ final class HotkeyCoordinator: ObservableObject {
     func menuScreenTranslate() { translateFromScreen() }
 
     func menuQuickTranslate() { quickTranslate.toggle() }
-
-    /// Reports what Accessibility exposes for the field the user clicks into after picking the menu
-    /// item. Nothing is shown until the report is ready: our own result panel activates BindAll, and
-    /// showing it first would make the diagnostics describe BindAll instead of the app being tested.
-    /// Polls for up to 6 seconds and keeps the first sample taken in another app with readable text.
-    func menuProofreadDiagnostics() {
-        pollDiagnostics(attemptsLeft: 12, best: nil)
-    }
-
-    private func pollDiagnostics(attemptsLeft: Int, best: String?) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
-            let sample = ProofreadDiagnostics.report(liveIssueCount: self.proofread.liveIssueCount,
-                                                     error: self.proofread.lastCheckError)
-            let isOwnApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
-            let usable = !isOwnApp && ProofreadDiagnostics.foundReadableField
-            if usable || attemptsLeft <= 1 {
-                self.popup.show(title: "Proofread diagnostics", text: usable ? sample : (best ?? sample))
-                return
-            }
-            self.pollDiagnostics(attemptsLeft: attemptsLeft - 1, best: isOwnApp ? best : sample)
-        }
-    }
 
     private func runFromMenu(_ which: MenuAction) {
         guard appState.settings.enabled, !isBusy else { return }

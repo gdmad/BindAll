@@ -60,9 +60,14 @@ final class UnderlineOverlay {
                 .insetBy(dx: -8, dy: -8)
         }
 
+        // The squiggles hang below their words, so the panel needs a little room under the field --
+        // otherwise the last line's underline is clipped away.
+        let margin = UnderlineGeometry.underlineDrop + 4
+        let panelFrame = field.insetBy(dx: 0, dy: -margin)
+
         // Panel-local coordinates.
-        let segments = wordRects.map { (rect: CGRect(x: $0.screen.minX - field.minX,
-                                                     y: $0.screen.minY - field.minY,
+        let segments = wordRects.map { (rect: CGRect(x: $0.screen.minX - panelFrame.minX,
+                                                     y: $0.screen.minY - panelFrame.minY,
                                                      width: $0.screen.width, height: $0.screen.height),
                                         color: $0.color) }
         shownFieldFrame = fieldQuartz ?? field
@@ -71,7 +76,7 @@ final class UnderlineOverlay {
         let view = (panel.contentView as? UnderlineView) ?? UnderlineView()
         view.segments = segments
         panel.contentView = view
-        panel.setFrame(field, display: true)
+        panel.setFrame(panelFrame, display: true)
         panel.orderFront(nil) // NOT makeKey: the text field must keep focus.
         installHideTriggers()
     }
@@ -108,15 +113,8 @@ final class UnderlineOverlay {
         return panel
     }
 
-    /// Colors mirror ProofreadPopover.color (SwiftUI Color there, NSColor here); keep them in sync.
-    /// Matches LanguageTool's own palette: red spelling, yellow grammar, green punctuation, blue style.
     private static func color(for kind: IssueKind) -> NSColor {
-        switch kind {
-        case .spelling: return .systemRed
-        case .grammar: return .systemYellow
-        case .punctuation: return .systemGreen
-        case .style: return .systemBlue
-        }
+        IssueKindStyle.nsColor(kind)
     }
 
     private static func primaryScreenHeight() -> CGFloat {
@@ -195,10 +193,10 @@ private final class UnderlineView: NSView {
             path.lineWidth = 2.5
             path.lineCapStyle = .round
             path.lineJoinStyle = .round
-            path.move(to: NSPoint(x: segment.rect.minX + points[0].x,
-                                  y: segment.rect.minY + points[0].y))
+            let baseline = segment.rect.minY - UnderlineGeometry.underlineDrop
+            path.move(to: NSPoint(x: segment.rect.minX + points[0].x, y: baseline + points[0].y))
             for p in points.dropFirst() {
-                path.line(to: NSPoint(x: segment.rect.minX + p.x, y: segment.rect.minY + p.y))
+                path.line(to: NSPoint(x: segment.rect.minX + p.x, y: baseline + p.y))
             }
             segment.color.withAlphaComponent(0.95).setStroke()
             path.stroke()

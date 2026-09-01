@@ -1,8 +1,6 @@
 import SwiftUI
-import AppKit
-import UniformTypeIdentifiers
 
-/// Settings for word autocomplete. The on/off switch lives on the General tab.
+/// Everything about word autocomplete, starting with its on/off switch.
 struct AutocompleteSettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var learnedCount = 0
@@ -11,9 +9,17 @@ struct AutocompleteSettingsView: View {
     var body: some View {
         Form {
             Section {
+                Toggle(isOn: $appState.settings.autocompleteEnabled) {
+                    helpHeader("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Works in most apps; skipped in password fields.")
+                }
+            } header: {
+                Text("Autocomplete")
+            }
+
+            Section {
                 Stepper("Suggestions shown: \(appState.settings.autocompleteCount)",
                         value: $appState.settings.autocompleteCount, in: 1...9)
-                Picker("Layout", selection: deferredWrite($appState.settings.autocompleteLayout)) {
+                Picker("Layout", selection: $appState.settings.autocompleteLayout) {
                     ForEach(PopupLayout.allCases, id: \.self) { layout in
                         Text(layout.displayName).tag(layout)
                     }
@@ -29,7 +35,7 @@ struct AutocompleteSettingsView: View {
                     .fixedSize()
                 }
             } header: {
-                helpHeader("Word autocomplete", "As you type, a list of completions appears near the cursor (arrow keys choose, Tab inserts). Pick one or more dictionary languages, or Auto. Skipped in password fields.")
+                helpHeader("Suggestions", "How the list looks: how many completions it offers, how they are arranged next to the cursor, and which dictionary languages they come from (or Auto).")
             }
 
             Section("Behavior") {
@@ -51,44 +57,16 @@ struct AutocompleteSettingsView: View {
                 }
             }
 
-            Section {
-                Picker("Show in", selection: deferredWrite($appState.settings.autocompleteAppMode)) {
-                    Text("All apps").tag("all")
-                    Text("Only selected apps").tag("allow")
-                    Text("All except selected").tag("deny")
-                }
-                if appState.settings.autocompleteAppMode != "all" {
-                    ForEach(appState.settings.autocompleteApps, id: \.self) { bundleID in
-                        HStack {
-                            Text(appName(bundleID))
-                            Spacer()
-                            Button {
-                                appState.settings.autocompleteApps.removeAll { $0 == bundleID }
-                            } label: {
-                                Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    Menu("Add app…") {
-                        Menu("Running apps") {
-                            ForEach(runningApps(), id: \.id) { app in
-                                Button(app.name) { addBundle(app.id) }
-                            }
-                        }
-                        Button("Choose from disk…") { addAppFromDisk() }
-                    }
-                    .controlSize(.small)
-                    .fixedSize()
-                }
-            } header: {
-                helpHeader("Apps", "Limit where autocomplete runs. 'Only selected' shows it just in the listed apps; 'All except' disables it there.")
-            }
+            AppFilterSection(title: "Apps",
+                             help: "Limit where autocomplete runs. 'Only selected' shows it just in the listed apps; 'All except' disables it there.",
+                             modeLabel: "Show in",
+                             mode: $appState.settings.autocompleteAppMode,
+                             apps: $appState.settings.autocompleteApps)
         }
         .formStyle(.grouped)
         .onAppear { learnedCount = AutocompleteLearningStore.shared.wordCount }
         .sheet(isPresented: $showLearned, onDismiss: { learnedCount = AutocompleteLearningStore.shared.wordCount }) {
-            LearnedWordsView()
+            LearnedWordsView(languages: appState.settings.autocompleteLanguages)
         }
     }
 
@@ -117,57 +95,30 @@ struct AutocompleteSettingsView: View {
         )
     }
 
-    // MARK: - Apps
-
-    private func appName(_ bundleID: String) -> String {
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-            return url.deletingPathExtension().lastPathComponent
-        }
-        return bundleID
-    }
-
-    private func addBundle(_ bundleID: String) {
-        if !appState.settings.autocompleteApps.contains(bundleID) {
-            appState.settings.autocompleteApps.append(bundleID)
-        }
-    }
-
-    /// Currently-running regular apps (includes Safari/Chrome web apps while they run), sorted by name.
-    private func runningApps() -> [(id: String, name: String)] {
-        let mine = Bundle.main.bundleIdentifier
-        var seen = Set<String>()
-        var apps: [(id: String, name: String)] = []
-        for app in NSWorkspace.shared.runningApplications
-        where app.activationPolicy == .regular {
-            guard let id = app.bundleIdentifier, id != mine, !seen.contains(id) else { continue }
-            seen.insert(id)
-            apps.append((id: id, name: app.localizedName ?? id))
-        }
-        return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    private func addAppFromDisk() {
-        let panel = NSOpenPanel()
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.allowedContentTypes = [.application]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url,
-              let bundleID = Bundle(url: url)?.bundleIdentifier else { return }
-        addBundle(bundleID)
-    }
 }
 
-/// View, add, and remove learned words.
+/// View, add, and remove learned words -- including the ones that are really typos.
 struct LearnedWordsView: View {
+    /// Dictionary languages to check against; empty means the auto-detected one.
+    let languages: [String]
+
     @Environment(\.dismiss) private var dismiss
     @State private var entries: [(word: String, count: Int)] = []
     @State private var search = ""
     @State private var newWord = ""
+    /// Words the dictionary does not know. Filled by a background pass over the whole vocabulary.
+    @State private var suspects: Set<String> = []
+    @State private var scanning = false
+    @State private var onlyTypos = false
+    @State private var confirmRemoveAll = false
 
     private var filtered: [(word: String, count: Int)] {
-        guard !search.isEmpty else { return entries }
-        return entries.filter { $0.word.lowercased().contains(search.lowercased()) }
+        var list = entries
+        if onlyTypos {
+            list = LearnedWordAudit.suspects(in: list) { !suspects.contains($0) }
+        }
+        guard !search.isEmpty else { return list }
+        return list.filter { $0.word.lowercased().contains(search.lowercased()) }
     }
 
     var body: some View {
@@ -199,17 +150,26 @@ struct LearnedWordsView: View {
             TextField("Search", text: $search)
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal)
-                .padding(.bottom, 8)
+
+            typoFilterRow
+                .padding(.horizontal)
+                .padding(.vertical, 8)
 
             List {
                 if filtered.isEmpty {
-                    Text("No words yet").foregroundStyle(.secondary)
+                    Text(onlyTypos ? "No suspicious words" : "No words yet").foregroundStyle(.secondary)
                 }
                 ForEach(filtered, id: \.word) { entry in
                     HStack {
+                        if suspects.contains(entry.word) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .help("The dictionary does not know this word")
+                        }
                         Text(entry.word)
                         Spacer()
-                        Text(entry.count >= 1_000_000 ? "pinned" : "\(entry.count)")
+                        Text(entry.count >= LearnedWordAudit.pinnedWeight ? "pinned" : "\(entry.count)")
                             .font(.caption).foregroundStyle(.secondary)
                         Button {
                             AutocompleteLearningStore.shared.remove(word: entry.word)
@@ -223,16 +183,69 @@ struct LearnedWordsView: View {
             }
         }
         .frame(width: 380, height: 440)
-        .onAppear(perform: reload)
+        .onAppear {
+            reload()
+            scan()
+        }
+        .confirmationDialog("Remove \(filtered.count) word(s)?", isPresented: $confirmRemoveAll) {
+            Button("Remove", role: .destructive) { removeAllListed() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("They will stop being suggested. Words you pinned by hand are never removed.")
+        }
+    }
+
+    /// Anything typed twice gets learned, typos included; this is how they are found and dropped.
+    private var typoFilterRow: some View {
+        HStack {
+            Toggle("Only possible typos", isOn: $onlyTypos)
+                .toggleStyle(.checkbox)
+                .disabled(scanning)
+            if scanning {
+                ProgressView().controlSize(.small)
+            }
+            Spacer()
+            if onlyTypos, !filtered.isEmpty {
+                Button("Remove all listed", role: .destructive) { confirmRemoveAll = true }
+                    .controlSize(.small)
+            }
+        }
     }
 
     private func reload() {
         entries = AutocompleteLearningStore.shared.entries()
     }
 
+    /// Checks the whole vocabulary against the dictionary off the main thread: NSSpellChecker is slow
+    /// enough that doing it inline would stall the sheet on a large vocabulary.
+    private func scan() {
+        let words = AutocompleteLearningStore.shared.entries()
+        let langs = languages
+        scanning = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let unknown = LearnedWordAudit.suspects(in: words) {
+                AutocompleteEngine.isKnownWord($0, languages: langs)
+            }
+            let found = Set(unknown.map(\.word))
+            DispatchQueue.main.async {
+                suspects = found
+                scanning = false
+            }
+        }
+    }
+
+    private func removeAllListed() {
+        for entry in filtered {
+            AutocompleteLearningStore.shared.remove(word: entry.word)
+        }
+        reload()
+        scan()
+    }
+
     private func addWord() {
         AutocompleteLearningStore.shared.add(custom: newWord)
         newWord = ""
         reload()
+        scan()
     }
 }

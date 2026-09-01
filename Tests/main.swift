@@ -261,6 +261,31 @@ check(disjoint.count == 2, "disjoint issues both survive")
 check(disjoint[0].range.location == 0, "merge output is sorted by location")
 check(IssueMerger.merge([issue(0, 0, original: "")]).isEmpty, "empty ranges are dropped")
 
+// Regression: an earlier, shorter match must not automatically beat a later, longer one just
+// because it starts first -- Slack messages with 8+ issues routinely produce this pair shape
+// (a one-word typo rule followed a couple of characters later by a longer grammar rule).
+let earlyShort = issue(0, 2, original: "te", replacements: ["te-fix"])
+let laterLong = issue(1, 5, original: "eh cat", replacements: ["the cat"])
+let lengthWins = IssueMerger.merge([earlyShort, laterLong])
+check(lengthWins.count == 1 && lengthWins[0].range.length == 5,
+      "a longer match starting later still wins the cluster")
+check(lengthWins[0].replacements == ["the cat"], "the losing match's own replacements are dropped")
+
+// Eight separate LanguageTool-style pairs (a short rule plus a longer, later-starting rule on
+// the same word) spread across one long message, each pair cleanly apart from the next -- the
+// shape of the reported Slack bug. Every pair must resolve to exactly its longer match; none of
+// the 8 problem spots may vanish entirely.
+let pairs = (0..<8).flatMap { i -> [TextIssue] in
+    let base = i * 20
+    return [issue(base, 2, original: "xx"), issue(base + 1, 6, original: "xxxxxx")]
+}
+let mergedPairs = IssueMerger.merge(pairs)
+check(mergedPairs.count == 8, "all 8 distinct problem spots survive, one issue each")
+for i in 0..<(mergedPairs.count - 1) {
+    check(NSMaxRange(mergedPairs[i].range) <= mergedPairs[i + 1].range.location,
+          "merge output never contains two issues that still overlap each other")
+}
+
 print("IssueMerger.firstIssue(overlapping:)")
 let picked = [issue(0, 3, original: "teh"), issue(10, 4, original: "wrng")]
 check(IssueMerger.firstIssue(in: picked, overlapping: NSRange(location: 10, length: 4))?.original == "wrng",
@@ -340,6 +365,130 @@ check(shifted[0].range == NSRange(location: 2, length: 2),
       "issue before the applied range is untouched")
 check(shifted[1].range == NSRange(location: 22, length: 3),
       "issue after the applied range slides by the exact delta")
+// An issue the edit reaches into no longer describes any text that exists.
+let overlapped = IssueMerger.shift([issue(10, 6, original: "aabbcc")],
+                                   replacedRange: NSRange(location: 12, length: 2),
+                                   replacementUTF16Length: 4)
+check(overlapped.isEmpty, "an issue the applied range cuts into is dropped")
+// A shorter replacement slides the rest backwards, not forwards.
+let shrunk = IssueMerger.shift([issue(20, 3, original: "bbb")],
+                               replacedRange: NSRange(location: 10, length: 5),
+                               replacementUTF16Length: 2)
+check(shrunk[0].range == NSRange(location: 17, length: 3), "a shorter replacement slides later issues back")
+// A deletion (empty replacement) is the extreme of the same case.
+let deleted = IssueMerger.shift([issue(20, 3, original: "bbb")],
+                                replacedRange: NSRange(location: 10, length: 4),
+                                replacementUTF16Length: 0)
+check(deleted[0].range == NSRange(location: 16, length: 3), "a deletion slides later issues by its full length")
+
+print("AutocompleteLearningStore")
+// An isolated store: temp state file plus temp seed files, so this never touches the real learned
+// vocabulary or the bundled seeds, and runs the same under `swiftc` as under the app.
+func makeStore(bigramSeed: [(String, String, Int)] = [], trigramSeed: [(String, String, String, Int)] = []) -> AutocompleteLearningStore {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bindall-test-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let bigramURL = dir.appendingPathComponent("bigrams.txt")
+    let bigramText = bigramSeed.map { "\($0.0)\t\($0.1)\t\($0.2)" }.joined(separator: "\n")
+    try! bigramText.write(to: bigramURL, atomically: true, encoding: .utf8)
+    let trigramURL = dir.appendingPathComponent("trigrams.txt")
+    let trigramText = trigramSeed.map { "\($0.0)\t\($0.1)\t\($0.2)\t\($0.3)" }.joined(separator: "\n")
+    try! trigramText.write(to: trigramURL, atomically: true, encoding: .utf8)
+    return AutocompleteLearningStore(fileURL: dir.appendingPathComponent("store.json"),
+                                     seedURL: bigramURL, trigramSeedURL: trigramURL)
+}
+
+// nextWords: learned trigram beats learned bigram beats the seed, in that order, and the seed is
+// exempt from the surface-count threshold that gates learned pairs.
+let s1 = makeStore(bigramSeed: [("в", "магазин", 500)])
+check(s1.nextWords(prev1: "в", prev2: nil, limit: 5) == ["магазин"],
+      "the seed backoff fires when nothing is learned, with no surface-count threshold")
+s1.record(word: "школу", prev1: "в", prev2: nil) // once: below minSurfaceCount
+check(s1.nextWords(prev1: "в", prev2: nil, limit: 5) == ["магазин"],
+      "a learned pair typed once does not outrank -- or even join -- the seed yet")
+s1.record(word: "школу", prev1: "в", prev2: nil) // twice: clears minSurfaceCount
+check(s1.nextWords(prev1: "в", prev2: nil, limit: 5) == ["школу", "магазин"],
+      "a learned bigram that clears the threshold is offered ahead of the seed")
+s1.record(word: "театр", prev1: "в", prev2: "пошёл")
+s1.record(word: "театр", prev1: "в", prev2: "пошёл")
+check(s1.nextWords(prev1: "в", prev2: "пошёл", limit: 5) == ["театр", "школу", "магазин"],
+      "a learned trigram is offered before the bigram backoff, not instead of it")
+check(s1.nextWords(prev1: "в", prev2: "пошёл", limit: 1) == ["театр"], "limit caps the result")
+check(s1.nextWords(prev1: "нигде", prev2: nil, limit: 5).isEmpty, "no evidence anywhere: nothing offered")
+
+// contextScore: the same precedence, plus every layer is normalized so a huge corpus count cannot
+// drown out a small personal one.
+let s2 = makeStore(bigramSeed: [("в", "магазин", 500), ("в", "школу", 10)],
+                   trigramSeed: [("пошёл", "в", "театр", 900)])
+s2.record(word: "магазин", prev1: "в", prev2: nil)
+s2.record(word: "магазин", prev1: "в", prev2: nil) // learned bigram, clears the threshold
+check(s2.contextScore(word: "магазин", prev1: "в", prev2: nil) >
+      s2.contextScore(word: "школу", prev1: "в", prev2: nil),
+      "a learned bigram outweighs the seed bigram even though the seed count is far larger")
+s2.record(word: "театр", prev1: "в", prev2: "пошёл")
+s2.record(word: "театр", prev1: "в", prev2: "пошёл") // learned trigram
+check(s2.contextScore(word: "театр", prev1: "в", prev2: "пошёл") >
+      s2.contextScore(word: "магазин", prev1: "в", prev2: "пошёл"),
+      "a learned trigram outweighs a learned bigram")
+check(s2.contextScore(word: "рынок", prev1: "в", prev2: nil) == 0,
+      "a word with no evidence anywhere scores zero")
+let s3 = makeStore()
+s3.record(word: "привет", prev1: nil, prev2: nil)
+check(s3.contextScore(word: "привет", prev1: nil, prev2: nil) > 0,
+      "personal frequency alone still contributes when there is no context match")
+
+// record(): the surface filter that keeps one-off typos out of nextWords's evidence.
+let s4 = makeStore()
+s4.record(word: "a", prev1: nil, prev2: nil)
+s4.record(word: "ok3", prev1: nil, prev2: nil)
+s4.record(word: "e-mail", prev1: nil, prev2: nil)
+check(s4.entries().isEmpty, "single-letter, digit-containing and hyphenated words are never learned")
+s4.record(word: "привет", prev1: nil, prev2: nil)
+check(s4.entries().map(\.word) == ["привет"], "an ordinary word is learned")
+
+print("LearnedWordAudit")
+// A small dictionary stands in for NSSpellChecker.
+let dictionary: Set<String> = ["привет", "спасибо", "hello"]
+let learned: [(word: String, count: Int)] = [
+    ("привет", 40),
+    ("прывет", 2),       // typo, typed twice -- already being suggested
+    ("прифет", 7),       // typo, typed often: still a typo
+    ("bindall", 1_000_000), // pinned by hand
+    ("ok", 3),           // too short to judge
+    ("hello", 12),
+]
+let suspects = LearnedWordAudit.suspects(in: learned) { dictionary.contains($0) }
+check(suspects.map(\.word) == ["прывет", "прифет"], "only the unknown, unpinned, long-enough words")
+check(suspects.first?.word == "прывет", "least-used first: the safest to drop is at the top")
+check(!suspects.contains { $0.word == "bindall" }, "a pinned word is never a suspect")
+check(!suspects.contains { $0.word == "ok" }, "short words are left alone")
+check(LearnedWordAudit.suspects(in: []) { _ in false }.isEmpty, "no words, no suspects")
+check(LearnedWordAudit.suspects(in: learned) { _ in true }.isEmpty,
+      "a dictionary that knows everything reports nothing")
+// Equal counts fall back to alphabetical order, so the list does not reshuffle between passes.
+let tied = LearnedWordAudit.suspects(in: [("ббб", 2), ("ааа", 2)]) { _ in false }
+check(tied.map(\.word) == ["ааа", "ббб"], "equal counts are ordered alphabetically")
+
+print("PopupTilePacker")
+check(PopupTilePacker.topRowCount(widths: [], spacing: 4, maxContent: 100) == 0, "no items: no first row")
+check(PopupTilePacker.topRowCount(widths: [50], spacing: 4, maxContent: 10) == 1,
+      "a single item keeps its row even when it does not fit")
+check(PopupTilePacker.topRowCount(widths: [30, 30, 30], spacing: 4, maxContent: 500) == 3,
+      "everything that fits stays on the first row")
+check(PopupTilePacker.topRowCount(widths: [30, 30, 30], spacing: 4, maxContent: 64) == 2,
+      "packing stops at the item that would overflow")
+// 30 + 4 + 30 = 64 exactly: the boundary belongs to the first row.
+check(PopupTilePacker.topRowCount(widths: [30, 30], spacing: 4, maxContent: 64) == 2,
+      "an item that fits exactly stays on the first row")
+check(PopupTilePacker.topRowCount(widths: [30, 30], spacing: 4, maxContent: 63) == 1,
+      "the spacing counts towards the width")
+check(PopupTilePacker.topRowCount(widths: [500, 20], spacing: 4, maxContent: 100) == 1,
+      "an over-wide first item does not drag the next one along")
+
+print("RecheckPolicy")
+check(RecheckPolicy.shouldRecheck(selectionCheckPending: false),
+      "with nothing in flight the post-write pass re-checks")
+check(!RecheckPolicy.shouldRecheck(selectionCheckPending: true),
+      "a click's check is left alone: cancelling it is what swallowed the popup")
 
 print("UnderlineGeometry")
 // Quartz -> AppKit flip. Primary screen 1000 pt tall; a rect whose top is 100 from the top ends up
@@ -369,17 +518,6 @@ check(!UnderlineGeometry.isSingleLine(rangeRect: CGRect(x: 0, y: 0, width: 100, 
 check(!UnderlineGeometry.isSingleLine(rangeRect: CGRect(x: 0, y: 0, width: 100, height: 16),
                                       probeRect: .zero),
       "a zero probe rect is rejected")
-
-print("ProofreadSupport")
-check(!ProofreadSupport.verified.isEmpty, "the tested-apps table is not empty")
-check(ProofreadSupport.verified.allSatisfy { !$0.bundleID.isEmpty && !$0.name.isEmpty },
-      "every entry has a bundle id and a name")
-check(Set(ProofreadSupport.verified.map(\.bundleID)).count == ProofreadSupport.verified.count,
-      "bundle ids are unique")
-check(ProofreadSupport.entry(for: "com.apple.TextEdit")?.name == "TextEdit",
-      "lookup finds a listed app")
-check(ProofreadSupport.entry(for: "com.example.unknown") == nil,
-      "lookup returns nothing for an app that was never tested")
 
 print("TextSegmenter.paragraphs")
 func tiles(_ ps: [Paragraph], _ text: String) -> Bool {
@@ -524,7 +662,71 @@ eq(prem.apiKey, "secret", "premium sends the token")
 s.languageToolMode = .selfHosted
 let selfh = s.languageToolConnection(token: "secret")
 eq(selfh.baseURL, "http://home.lan:8081/v2", "self-hosted uses the user URL")
-eq(selfh.apiKey, "secret", "self-hosted forwards the token when present")
+check(selfh.username.isEmpty && selfh.apiKey.isEmpty,
+      "self-hosted sends no credentials: the server is reached by URL alone")
+
+print("Settings persistence: every setting survives a round trip")
+// A setting that reaches the struct but not CodingKeys (or not init(from:)) is silently dropped on
+// save and comes back as its default -- the "I changed it and it did not stick" class of bug. This
+// fixture changes EVERY field, so any such field breaks the round trip below.
+var allChanged = Settings()
+allChanged.enabled = false
+allChanged.defaultEngine = .openai
+allChanged.separator = "//"
+allChanged.defaultPrompt = "custom prompt"
+allChanged.actionKeys = [ActionKey(key: "z", label: "Zap", prompt: "Zap it",
+                                   hotkey: HotkeyConfig(keyCode: 6,
+                                                        modifiers: HotkeyModifiers(command: true, option: true),
+                                                        repeatCount: 1))]
+allChanged.restoreClipboard = true
+allChanged.maskAISlop = true
+allChanged.autocompleteEnabled = true
+allChanged.autocompleteCount = 9
+allChanged.popupFontSize = 20
+allChanged.autocompleteLayout = .tile
+allChanged.autocompleteLanguages = ["ru", "en"]
+allChanged.autocompleteLearn = false
+allChanged.autocompleteNextWord = false
+allChanged.autocompleteAcceptReturn = false
+allChanged.autocompleteContextRanking = false
+allChanged.autocompleteAppMode = "deny"
+allChanged.autocompleteApps = ["com.example.one"]
+allChanged.proofreadMaxReplacements = 7
+allChanged.proofreadLayout = .line
+allChanged.proofreadMinLength = 42
+allChanged.proofreadAppMode = "allow"
+allChanged.proofreadApps = ["com.example.two"]
+allChanged.historyEnabled = false
+allChanged.sourceLanguage = "de"
+allChanged.targetLanguage = "fr"
+allChanged.correctEnabled = true
+allChanged.languageToolMode = .premium
+allChanged.languageToolBaseURL = "http://home.lan:8081/v2"
+allChanged.languageToolUsername = "me@example.com"
+allChanged.languageToolLanguage = "uk"
+allChanged.openRouterFreeOnly = true
+allChanged.providers = [ProviderConfig(kind: .ollama, baseURLOverride: "http://localhost:11434", model: "qwen")]
+allChanged.defaultActionHotkey = HotkeyConfig(keyCode: 1, modifiers: HotkeyModifiers(command: true), repeatCount: 1)
+allChanged.translateHotkey = HotkeyConfig(keyCode: 2, modifiers: HotkeyModifiers(command: true, shift: true), repeatCount: 2)
+allChanged.screenTranslateHotkey = HotkeyConfig(keyCode: 3, modifiers: HotkeyModifiers(command: true, control: true), repeatCount: 1)
+allChanged.quickTranslateHotkey = HotkeyConfig(keyCode: 4, modifiers: HotkeyModifiers(command: true, option: true), repeatCount: 3)
+
+let savedSettings = try! JSONEncoder().encode(allChanged)
+check(try! JSONDecoder().decode(Settings.self, from: savedSettings) == allChanged,
+      "every setting survives encode -> decode unchanged")
+
+let savedJSON = try! JSONSerialization.jsonObject(with: savedSettings) as! [String: Any]
+let defaultJSON = try! JSONSerialization.jsonObject(with: try! JSONEncoder().encode(Settings())) as! [String: Any]
+// Guards the fixture itself: a new setting nobody changed above would make the round trip pass for
+// the wrong reason.
+let untouched = savedJSON.keys.filter { key in
+    guard let mine = savedJSON[key], let theirs = defaultJSON[key] else { return false }
+    return NSDictionary(dictionary: [key: mine]).isEqual(to: [key: theirs])
+}.sorted()
+check(untouched.isEmpty, "the fixture changes every setting (still at default: \(untouched))")
+// And that nothing was added to the struct without a CodingKey, which is how a setting stops saving.
+check(savedJSON.count == Mirror(reflecting: allChanged).children.count,
+      "every stored property has a CodingKey (\(savedJSON.count) encoded vs \(Mirror(reflecting: allChanged).children.count) properties)")
 
 print("Settings default and resilient decoding")
 func decode(_ json: String) -> Settings {
@@ -574,6 +776,18 @@ check(PopupLayout.tileIndex(from: 5, deltaX: 1, deltaY: 0, count: 6, topRowCount
       "measured top row: horizontal wraps")
 check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: 1, count: 6) == 3,
       "default topRowCount keeps the even split")
+// Everything measured onto one row: there is no second row to move to.
+check(PopupLayout.tileIndex(from: 1, deltaX: 0, deltaY: 1, count: 4, topRowCount: 4) == 1,
+      "one full row: down does nothing")
+check(PopupLayout.tileIndex(from: 2, deltaX: 0, deltaY: -1, count: 4, topRowCount: 4) == 2,
+      "one full row: up does nothing")
+check(PopupLayout.tileIndex(from: 1, deltaX: 0, deltaY: 1, count: 4, topRowCount: 9) == 1,
+      "a topRowCount past the end is treated as one full row")
+check(PopupLayout.tileIndex(from: 1, deltaX: 1, deltaY: 0, count: 4, topRowCount: 4) == 2,
+      "one full row still walks horizontally")
+check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: 1, count: 3, topRowCount: 1) == 1,
+      "a one-item first row steps down item by item")
+check(PopupLayout.tileIndex(from: 0, deltaX: 0, deltaY: 1, count: 1) == 0, "a lone item stays put")
 
 print("LanguageToolEngine.authParams")
 let loneUser = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", apiKey: "")

@@ -17,9 +17,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }()
     private var cancellables = Set<AnyCancellable>()
 
-    /// SF Symbol shown when idle.
-    private let idleSymbol = "text.cursor"
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
@@ -66,14 +63,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         rebuildMenu()
     }
 
-    /// The icon is the button's own image, so the system click highlight and template inversion
-    /// work correctly. While busy, the sparkles icon pulses via the button's alpha (symbol-effect
-    /// animations would require an overlay view, which breaks the highlight).
+    /// The icon is always "sparkles" -- idle and busy differ only in animation, not symbol. It is
+    /// the button's own image, so the system click highlight and template inversion work correctly.
+    /// While busy, it pulses via the button's alpha (symbol-effect animations would require an
+    /// overlay view, which breaks the highlight).
     private func updateStatusIcon(busy: Bool) {
         guard let button = statusItem?.button else { return }
-        let symbol = busy ? "sparkles" : idleSymbol
         let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        var image = NSImage(systemSymbolName: symbol, accessibilityDescription: busy ? "BindAll — working" : "BindAll")
+        var image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: busy ? "BindAll — working" : "BindAll")
         image = image?.withSymbolConfiguration(config)
         image?.isTemplate = true
         button.image = image
@@ -120,9 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         menu.addItem(.separator())
 
-        // The same actions the global shortcuts trigger, plus Settings/Quit, all drawn with their
-        // shortcut in one shared right-aligned column. Settings/Quit use custom titles (not native
-        // key equivalents) so they share the column and the menu has no stray space on the right.
+        // The same actions the global shortcuts trigger, drawn with their shortcut in one shared
+        // right-aligned column: a burst like Cmd+C+C cannot be expressed as a key equivalent, so it
+        // has to be drawn. Settings and Quit get real key equivalents instead of drawn ones -- a
+        // shortcut that is only painted on does nothing when pressed.
         let s = appState.settings
         var actions: [(title: String, shortcut: String, action: Selector)] = [
             ("Fix selection", HotkeyFormatter.string(s.defaultActionHotkey), #selector(menuFix)),
@@ -130,14 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             ("Translate from screen", HotkeyFormatter.string(s.screenTranslateHotkey), #selector(menuScreenTranslate)),
             ("Quick Translate", HotkeyFormatter.string(s.quickTranslateHotkey), #selector(menuQuickTranslate)),
         ]
-        if s.correctEnabled {
-            actions.append(("Proofread diagnostics (click into a field)…", "", #selector(menuProofreadDiagnostics)))
-        }
-
         // Column = widest "title + gap + shortcut" across every shortcut-bearing item.
         let font = NSFont.menuFont(ofSize: 0)
         let gap: CGFloat = 18
-        let widths = (actions.map { ($0.title, $0.shortcut) } + [("Settings…", "⌘,"), ("Quit BindAll", "⌘Q")])
+        let widths = actions.map { ($0.title, $0.shortcut) }
             .map { (title, shortcut) in
                 (title as NSString).size(withAttributes: [.font: font]).width + gap
                     + (shortcut as NSString).size(withAttributes: [.font: font]).width
@@ -158,8 +152,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menu.addItem(history)
         }
 
-        menu.addItem(actionMenuItem("Settings…", shortcut: "⌘,", action: #selector(showSettings), tab: column))
-        menu.addItem(actionMenuItem("Quit BindAll", shortcut: "⌘Q", action: #selector(quit), tab: column))
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        settings.keyEquivalentModifierMask = [.command]
+        settings.target = self
+        menu.addItem(settings)
+
+        let quitItem = NSMenuItem(title: "Quit BindAll", action: #selector(quit), keyEquivalent: "q")
+        quitItem.keyEquivalentModifierMask = [.command]
+        quitItem.target = self
+        menu.addItem(quitItem)
     }
 
     /// Shows the History panel as a popover anchored to the status item.
@@ -203,16 +204,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.setContentSize(NSSize(width: 560, height: 558))
-            window.center()
+            // Remember where the user put it, instead of yanking it back to the center every time.
+            if !window.setFrameUsingName(Self.settingsFrameName) { window.center() }
+            window.setFrameAutosaveName(Self.settingsFrameName)
             settingsWindow = window
         }
         // An .accessory app cannot reliably bring a window to the front; switch to .regular while
         // the settings window is visible, then revert when it closes (see windowWillClose).
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        settingsWindow?.center()
         settingsWindow?.makeKeyAndOrderFront(nil)
         settingsWindow?.orderFrontRegardless()
+        redirectAppMenuSettingsItem()
+    }
+
+    private static let settingsFrameName = "BindAll.settingsWindow"
+
+    /// The app's own menu bar exists only while the activation policy is `.regular`, and its
+    /// "Settings…" item points at SwiftUI's `Settings` scene -- a placeholder that exists purely to
+    /// satisfy the "an App must have a Scene" requirement and opens an empty window. Point it at the
+    /// real settings window instead.
+    private func redirectAppMenuSettingsItem() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
+            let scenePreferences: Set<Selector> = [Selector(("showSettingsWindow:")),
+                                                   Selector(("showPreferencesWindow:"))]
+            for item in appMenu.items where item.action.map(scenePreferences.contains) == true {
+                item.target = self
+                item.action = #selector(self.showSettings)
+            }
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -254,7 +275,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func menuTranslate() { coordinator.menuTranslate() }
     @objc private func menuScreenTranslate() { coordinator.menuScreenTranslate() }
     @objc private func menuQuickTranslate() { coordinator.menuQuickTranslate() }
-    @objc private func menuProofreadDiagnostics() { coordinator.menuProofreadDiagnostics() }
 }
 
 /// A window that closes on Esc (cancelOperation), used for the Settings window.

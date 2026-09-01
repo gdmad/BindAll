@@ -14,12 +14,15 @@ swiftc -O \
     BindAll/Proofread/TextIssue.swift \
     BindAll/Proofread/WordBoundary.swift \
     BindAll/Proofread/UnderlineGeometry.swift \
-    BindAll/Proofread/ProofreadSupport.swift \
     BindAll/Proofread/IssueMerger.swift \
     BindAll/Proofread/ProofreadCache.swift \
     BindAll/Proofread/ProofreadLanguage.swift \
+    BindAll/Proofread/RecheckPolicy.swift \
+    BindAll/UI/PopupTilePacker.swift \
     BindAll/Engines/LanguageToolEngine.swift \
     BindAll/Autocomplete/AutocompleteEngine.swift \
+    BindAll/Autocomplete/AutocompleteLearningStore.swift \
+    BindAll/Autocomplete/LearnedWordAudit.swift \
     Tests/main.swift \
     -o "$OUT"
 

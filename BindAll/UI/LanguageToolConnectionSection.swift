@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The LanguageTool connection block (mode, URL, credentials, language, test), hosted on the
+/// The LanguageTool connection block (mode, URL, credentials, test), hosted on the
 /// Proofread tab: LanguageTool serves only that feature, so its connection lives with it, the way
 /// every other feature keeps its options on its own tab.
 struct LanguageToolConnectionSection: View {
@@ -16,6 +16,8 @@ struct LanguageToolConnectionSection: View {
     @State private var testing = false
     @State private var modeDraft: LanguageToolMode = .free
     @State private var testTask: Task<Void, Never>?
+    /// A token stored while typing still needs one engine rebuild.
+    @State private var tokenPendingReconfigure = false
 
     var body: some View {
         Section {
@@ -45,16 +47,9 @@ struct LanguageToolConnectionSection: View {
                         DispatchQueue.main.async { appState.settings.languageToolBaseURL = url }
                     }
             }
-            LabeledContent("Language") {
-                Picker("", selection: deferredWrite($appState.settings.languageToolLanguage)) {
-                    Text("Auto Detect").tag(AppLanguages.autoTag)
-                    ForEach(AppLanguages.list, id: \.code) { Text($0.name).tag($0.code) }
-                }
-                .labelsHidden().fixedSize()
-            }
-
-            // Credentials only matter for Premium (required) and self-hosted with auth (optional).
-            if modeDraft != .free {
+            // Credentials belong to Premium only: the public server rejects them, and a self-hosted
+            // server is reached by URL.
+            if modeDraft == .premium {
                 LabeledContent("Username / email") {
                     TextField("", text: $usernameDraft)
                         .labelsHidden().textFieldStyle(.plain).darkField()
@@ -63,10 +58,15 @@ struct LanguageToolConnectionSection: View {
                         }
                 }
                 LabeledContent("API token") {
+                    // Saved as it is typed, like every other control here: neither onSubmit nor
+                    // onDisappear fires when the window is simply closed, and a token typed and left
+                    // behind used to be discarded silently. The engine is rebuilt once, on submit or
+                    // when the tab goes away, rather than on every keystroke.
                     SecureField("", text: $tokenDraft)
                         .labelsHidden().textFieldStyle(.plain).darkField()
+                        .onChange(of: tokenDraft) { _, _ in storeToken() }
+                        .onSubmit { commitToken() }
                 }
-                Button("Save token") { appState.setLanguageToolToken(tokenDraft) }
             }
 
             HStack {
@@ -81,16 +81,32 @@ struct LanguageToolConnectionSection: View {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
-            helpHeader("LanguageTool server", "How BindAll reaches LanguageTool.\n\nFree public: api.languagetool.org, no account, rate-limited, and your text is sent to languagetool.org. Credentials are never sent (the public server rejects them).\n\nPremium: api.languagetoolplus.com (a different host) with the username and token from your LanguageTool Premium account.\n\nSelf-hosted: your own server URL; username and token only if you put authentication in front of it.\n\nThe URL is pre-filled per mode but stays editable.")
+            helpHeader("LanguageTool server", "How BindAll reaches LanguageTool.\n\nFree public: api.languagetool.org, no account, rate-limited, and your text is sent to languagetool.org. Credentials are never sent (the public server rejects them).\n\nPremium: api.languagetoolplus.com (a different host) with the username and token from your LanguageTool Premium account.\n\nSelf-hosted: your own server URL, no credentials.\n\nThe URL is pre-filled per mode but stays editable.")
         }
         .onAppear { load() }
         .onDisappear {
+            commitToken()
             // A verdict must not survive a tab switch, and an in-flight test must not surface later.
             testTask?.cancel()
             testTask = nil
             testing = false
             resetTest()
         }
+    }
+
+    /// Keeps the Keychain in step with the field without rebuilding the engine on every keystroke.
+    private func storeToken() {
+        guard tokenDraft != appState.languageToolToken() else { return }
+        appState.setLanguageToolToken(tokenDraft, reconfigure: false)
+        tokenPendingReconfigure = true
+    }
+
+    /// The field is done with: make sure it is stored, then rebuild the engine once.
+    private func commitToken() {
+        storeToken()
+        guard tokenPendingReconfigure else { return }
+        tokenPendingReconfigure = false
+        appState.setLanguageToolToken(tokenDraft)
     }
 
     private func load() {
@@ -107,7 +123,7 @@ struct LanguageToolConnectionSection: View {
     }
 
     private func test() {
-        appState.setLanguageToolToken(tokenDraft)
+        commitToken()
         testing = true
         resetTest()
         let engine = EngineFactory.makeLanguageTool(appState: appState)

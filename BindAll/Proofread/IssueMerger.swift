@@ -7,10 +7,12 @@ enum IssueMerger {
     ///
     /// LanguageTool routinely reports several matches over the same or overlapping text (a typo rule
     /// and a grammar rule can both fire on one word). Stepping through those one by one would ask the
-    /// user about the same word twice, and the second range would be stale after the first fix. So:
+    /// user about the same word twice, and the second range would be stale after the first fix. So,
+    /// scanning left to right and tracking the reach of the current cluster of overlapping matches:
     ///   - identical ranges collapse into one issue keeping both sets of replacements;
-    ///   - otherwise, scanning left to right, an issue overlapping an accepted one is dropped.
-    /// Longer matches win, since they carry the more complete rewrite.
+    ///   - otherwise the longer match wins and replaces the shorter one already kept for this cluster.
+    /// The cluster's reach is the max end of every match seen in it, not just the current winner's --
+    /// a match that starts late but is itself short can still be swallowed by an earlier, longer one.
     static func merge(_ issues: [TextIssue]) -> [TextIssue] {
         let sorted = issues.filter { !$0.original.isEmpty }.sorted { a, b in
             if a.range.location != b.range.location { return a.range.location < b.range.location }
@@ -18,20 +20,25 @@ enum IssueMerger {
         }
 
         var out: [TextIssue] = []
+        var clusterEnd = 0
         for issue in sorted {
             guard issue.range.length > 0 else { continue }
-            guard let last = out.last else { out.append(issue); continue }
-
-            if NSEqualRanges(last.range, issue.range) {
-                var merged = last
-                merged.replacements = dedup(last.replacements + issue.replacements)
-                out[out.count - 1] = merged
+            guard !out.isEmpty, issue.range.location < clusterEnd else {
+                out.append(issue)
+                clusterEnd = NSMaxRange(issue.range)
                 continue
             }
-            // `sorted` guarantees issue.range.location >= last.range.location, so an overlap can only
-            // mean this issue starts before the accepted one ends.
-            if issue.range.location < NSMaxRange(last.range) { continue }
-            out.append(issue)
+
+            clusterEnd = max(clusterEnd, NSMaxRange(issue.range))
+            let winner = out[out.count - 1]
+            if NSEqualRanges(winner.range, issue.range) {
+                var merged = winner
+                merged.replacements = dedup(winner.replacements + issue.replacements)
+                out[out.count - 1] = merged
+            } else if issue.range.length > winner.range.length {
+                out[out.count - 1] = issue
+            }
+            // else: shorter (or equal-length, different-range) match loses the cluster and is dropped.
         }
         return out
     }

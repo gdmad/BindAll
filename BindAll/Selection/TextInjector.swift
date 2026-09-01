@@ -65,6 +65,10 @@ enum TextInjector {
               let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { return }
         down.flags = .maskCommand
         up.flags = .maskCommand
+        // Marked so our own keyboard watchers ignore it: proofread's typing monitor would otherwise
+        // treat the paste that applies a fix as the user typing.
+        InjectedEvents.mark(down)
+        InjectedEvents.mark(up)
         down.post(tap: .cgAnnotatedSessionEventTap)
         up.post(tap: .cgAnnotatedSessionEventTap)
     }

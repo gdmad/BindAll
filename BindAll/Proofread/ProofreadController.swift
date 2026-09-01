@@ -46,6 +46,9 @@ final class ProofreadController {
     private var checkTask: Task<Void, Never>?
     /// Bumped on every new check and on end(); a result that comes back stale is dropped.
     private var generation = 0
+    /// True while a check started from a click (one that carries the clicked word) is in flight. The
+    /// post-write re-check stands down for it rather than cancelling it -- see `RecheckPolicy`.
+    private var pendingSelectionCheck = false
 
     /// Typing pause that triggers a live re-check.
     private let typingPause: TimeInterval = 0.6
@@ -57,14 +60,12 @@ final class ProofreadController {
     /// True while a fix is being applied (the applier waits for the app's selection to settle).
     private var isApplying = false
 
-    /// For the diagnostics report.
-    var liveIssueCount: Int { issues.count }
-    var lastCheckError: String? { lastError }
-
     // Key interception, alive only while the popup is up.
     private var tap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var tapEnabled = false
+    /// Whether a navigable popup session is currently announced to `onSessionChange`.
+    private var sessionActive = false
     /// The one piece of state the tap callback reads. It lives outside the main actor because the
     /// callback runs on the tap thread and must decide without hopping or blocking.
     private let shared = SharedState()
@@ -164,18 +165,25 @@ final class ProofreadController {
         }
 
         let sameField = target?.element == found.element
+        // The click landed on something we already knew was a problem: worth saying so if the fresh
+        // check disagrees, instead of closing the popup without a word.
+        let hadIssue = sameField && IssueMerger.firstIssue(in: issues, overlapping: probe) != nil
         target = found
         if sameField, found.text == lastCheckedText,
            showFixes(overlapping: probe) {
             return // already known: no round trip
         }
+        // The issues belong to the field they were found in; keep them only while the field is.
+        if !sameField { issues = [] }
         // Either the text is new or the click missed every known issue (ranges may have drifted
         // after an applied fix). Re-check and open the popup from the fresh result.
-        check(text: found.text, offset: 0, selection: probe)
+        check(text: found.text, offset: 0, selection: probe, announceMiss: hadIssue)
     }
 
     /// Typing paused: re-check the focused field so the underlines match what is on screen now.
-    private func typingPaused() {
+    /// `resumeIndex`, when given (only by `recheckAfterWrite`, right after a fix landed), asks the
+    /// fresh result to reopen the popup on the issue now sitting at that position -- see `check`.
+    private func typingPaused(resumeIndex: Int? = nil) {
         guard config.enabled, AccessibilityPermission.isGranted, appAllowed() else { return }
         guard case .axField(let found) = ProofreadAX.focus() else { clearLive(); return }
         guard found.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= config.minLength else {
@@ -191,8 +199,9 @@ final class ProofreadController {
             return
         }
         if !sameField { issues = [] }
-        // Paragraph cache keeps this to one request for the paragraph actually edited.
-        check(text: found.text, offset: 0)
+        // Paragraph cache keeps this to one request for the paragraph actually edited. A resume only
+        // makes sense against the same field the fix was applied in.
+        check(text: found.text, offset: 0, resumeIndex: sameField ? resumeIndex : nil)
     }
 
     // MARK: - Checking
@@ -200,20 +209,23 @@ final class ProofreadController {
     /// Checks `text`; `selection`, when given, is the word the user clicked and decides whether the
     /// fixes pop up afterwards. Checking is always in the background now, so nothing is shown while
     /// it runs -- only a server error the user has not seen yet.
-    private func check(text: String, offset: Int, selection: NSRange? = nil) {
+    private func check(text: String, offset: Int, selection: NSRange? = nil, announceMiss: Bool = false,
+                       resumeIndex: Int? = nil) {
         guard let provider else { return }
         generation &+= 1
         let gen = generation
         checkTask?.cancel()
+        pendingSelectionCheck = selection != nil
 
         checkTask = Task { [weak self] in
             guard let self else { return }
+            defer { if gen == self.generation { self.pendingSelectionCheck = false } }
             do {
                 let found = try await provider.check(text)
                 guard !Task.isCancelled, gen == self.generation else { return }
                 let rebased = offset == 0 ? found : ProofreadCache.rebase(found, to: offset)
                 self.lastError = nil
-                self.applyResults(rebased, selection: selection)
+                self.applyResults(rebased, selection: selection, announceMiss: announceMiss, resumeIndex: resumeIndex)
             } catch {
                 guard !Task.isCancelled, gen == self.generation else { return }
                 // Live checking runs unprompted, so report a problem once rather than on every pause.
@@ -226,15 +238,28 @@ final class ProofreadController {
         }
     }
 
-    private func applyResults(_ found: [TextIssue], selection: NSRange?) {
+    private func applyResults(_ found: [TextIssue], selection: NSRange?, announceMiss: Bool = false,
+                              resumeIndex: Int? = nil) {
         // Cap once at the door so the popup, arrow navigation and accept all see the same list.
         issues = IssueMerger.capReplacements(found, limit: config.maxReplacements)
         lastCheckedText = target?.text ?? ""
         redrawUnderlines()
 
-        // The popup only opens for a clicked word that sits on an issue.
-        guard let selection else { return }
-        showFixes(overlapping: selection)
+        if let selection {
+            // The popup only opens for a clicked word that sits on an issue.
+            if !showFixes(overlapping: selection), announceMiss {
+                // The word was underlined a moment ago and is not any more: say so rather than
+                // leaving the click looking like it did nothing.
+                flash("Nothing to fix here any more.")
+            }
+            return
+        }
+        // Fixing an issue removes exactly one element from the array, so whatever was next in
+        // document order now sits at the fixed issue's old index -- no matching needed, just clamp.
+        // An out-of-range index (the fixed issue was the last one) correctly opens nothing.
+        if let resumeIndex, !issues.isEmpty {
+            focusIssue(min(resumeIndex, issues.count - 1))
+        }
     }
 
     /// Opens the popup for the issue under `probe`, if there is one. Keeps the underlines either way.
@@ -316,7 +341,8 @@ final class ProofreadController {
     private func moveGrid(dx: Int, dy: Int) {
         guard let issue = issues[safe: currentIndex], issue.replacements.count > 0 else { return }
         selectedReplacement = PopupLayout.tileIndex(from: selectedReplacement, deltaX: dx, deltaY: dy,
-                                                    count: issue.replacements.count)
+                                                    count: issue.replacements.count,
+                                                    topRowCount: popover.lastTileTopCount)
         showCurrent(select: false)
     }
 
@@ -350,7 +376,8 @@ final class ProofreadController {
         guard let issue = issues[safe: currentIndex],
               let replacement = issue.replacements[safe: selectedReplacement] else {
             Self.log.debug("accept: no issue/replacement at \(self.currentIndex)/\(self.selectedReplacement)")
-            step(1)
+            // With a single fixless issue, stepping would land back on it and repeat forever.
+            if issues.count > 1 { step(1) } else { endNavigation() }
             return
         }
         guard let target else {
@@ -374,15 +401,19 @@ final class ProofreadController {
     private func handleApplyResult(_ result: IssueApplier.Result, issue: TextIssue, replacement: String) {
         switch result {
         case .applied(let replacedRange):
+            // Captured before endNavigation() resets currentIndex: the issue that was next in order
+            // ends up at this same position once the fixed one is gone from the fresh, re-checked list.
+            let fixedIndex = currentIndex
             // Slide the remaining ranges so the underlines move with the text right away.
             issues = IssueMerger.shift(issues, replacedRange: replacedRange,
                                        replacementUTF16Length: (replacement as NSString).length)
-            // The popup closes: stepping straight to the next issue would work off ranges that are
-            // only a guess until the write actually lands (the paste path is asynchronous), which is
-            // how the following fix ended up refusing or hitting the wrong word.
+            // The popup closes rather than jumping straight to the next issue: stepping off these
+            // locally shifted ranges is only a guess until the write actually lands (the paste path
+            // is asynchronous), which is how the following fix ended up refusing or hitting the wrong
+            // word. `recheckAfterWrite` reopens it on fresh, confirmed data once the write is done.
             endNavigation()
             underlines.hide()
-            recheckAfterWrite(previousText: lastCheckedText)
+            recheckAfterWrite(previousText: lastCheckedText, resumeAt: fixedIndex)
         case .stale:
             // Force the next pause to re-check: what we knew about the field no longer holds.
             lastCheckedText = ""
@@ -394,10 +425,12 @@ final class ProofreadController {
 
     /// Waits for the applied fix to actually show up in the field (Chromium pastes asynchronously)
     /// and then re-checks it. Re-checking rather than trusting local arithmetic is what keeps the
-    /// next fix honest: every range then comes from the text as it really is. The re-check always
-    /// runs -- even when the value never changed or another check started meanwhile -- so the
-    /// underlines can never silently go stale after a fix.
-    private func recheckAfterWrite(previousText: String) {
+    /// next fix honest: every range then comes from the text as it really is. It runs even when the
+    /// value never changed, so the underlines can never silently go stale after a fix -- the single
+    /// exception is a check started from a click, which `RecheckPolicy` defers to. On success it also
+    /// reopens the popup on the next issue (`resumeAt`), so fixing several problems in a row does not
+    /// require clicking back into the field after each one.
+    private func recheckAfterWrite(previousText: String, resumeAt index: Int) {
         Task { @MainActor [weak self] in
             var changed = false
             for _ in 0..<12 {
@@ -410,8 +443,12 @@ final class ProofreadController {
             if !changed {
                 Self.log.warning("field text did not change after an applied fix; the paste may not have landed")
             }
+            guard RecheckPolicy.shouldRecheck(selectionCheckPending: self.pendingSelectionCheck) else {
+                Self.log.debug("skipping the post-write re-check: a click's check is already in flight")
+                return
+            }
             self.lastCheckedText = "" // force a real check, not a redraw
-            self.typingPaused()
+            self.typingPaused(resumeIndex: index)
         }
     }
 
@@ -430,6 +467,9 @@ final class ProofreadController {
         checkTask?.cancel()
         checkTask = nil
         generation &+= 1
+        pendingSelectionCheck = false
+        // An AX call that never returns would otherwise leave accepts blocked for good.
+        isApplying = false
         issues = []
         lastCheckedText = ""
         target = nil
@@ -459,9 +499,15 @@ final class ProofreadController {
     private func setActive(_ on: Bool) {
         shared.isActive = on
         if on { installTap() }
-        guard let tap, on != tapEnabled else { if !on { onSessionChange?(false) }; return }
-        tapEnabled = on
-        CGEvent.tapEnable(tap: tap, enable: on)
+        if let tap, on != tapEnabled {
+            tapEnabled = on
+            CGEvent.tapEnable(tap: tap, enable: on)
+        }
+        // Announced on the session change itself, not on the tap toggle: when the tap could not be
+        // created autocomplete must still stand down, or both features consume Tab. Exactly one
+        // notification per transition, so the other side can count suspend/resume.
+        guard on != sessionActive else { return }
+        sessionActive = on
         onSessionChange?(on)
     }
 
@@ -578,8 +624,12 @@ final class ProofreadController {
     /// them is moving -- and come back with the fresh result.
     private func startTypingMonitor() {
         guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] _ in
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self else { return }
+            // Our own synthetic keys (the paste that applies a fix, an autocomplete insertion) are
+            // not the user typing: reacting to them would hide the underlines and start a second
+            // re-check on top of the one the applier already schedules.
+            guard !InjectedEvents.isInjected(event) else { return }
             self.underlines.hide()
             self.typingDebounce?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.typingPaused() }
