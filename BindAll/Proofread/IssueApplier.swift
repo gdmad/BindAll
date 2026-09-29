@@ -121,7 +121,11 @@ enum IssueApplier {
     private static func selectionSettled(on element: AXUIElement, equals original: String,
                                          range: NSRange) async -> Bool {
         var confirmations = 0
-        for attempt in 0..<8 {
+        // A settled selection normally reads back within two polls; the long tail is Electron
+        // editors under load (Slack rendering a busy channel), where giving up early is what turned
+        // a perfectly applicable fix into "the text changed". Waiting costs nothing on the happy
+        // path -- the loop exits as soon as two reads agree.
+        for attempt in 0..<16 {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 40_000_000) }
             guard let selectedRange = ProofreadAX.selectedRange(of: element) else {
                 // No readable selection: the selected text is the only thing left to check.
@@ -133,9 +137,14 @@ enum IssueApplier {
                 return true // the app exposes neither; nothing left to check against
             }
             // What the app says is selected, by its own reckoning -- not our arithmetic. Chromium
-            // echoes the range we wrote straight back, so the range alone proves nothing.
-            let selectedText = ProofreadAX.string(for: selectedRange, in: element)
-                ?? ProofreadAX.selectedText(of: element)
+            // echoes the range we wrote straight back, so the range alone proves nothing, and neither
+            // does `string(for: selectedRange)`: it reads the range back through the same coordinate
+            // space we just wrote it in, so it echoes `original` even when the real selection has not
+            // caught up or landed elsewhere. `kAXSelectedText` is the app's own answer, independent of
+            // our range arithmetic, so it goes first; `string(for:)` is only a fallback for the apps
+            // that do not expose it at all.
+            let selectedText = ProofreadAX.selectedText(of: element)
+                ?? ProofreadAX.string(for: selectedRange, in: element)
             if let selectedText {
                 confirmations = selectedText == original ? confirmations + 1 : 0
             } else {

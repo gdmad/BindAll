@@ -5,7 +5,7 @@ import AppKit
 ///
 /// Lifetime: shown when a check lands (`applyResults`) and hidden by `end()`. While visible the
 /// overlay owns three passive hide triggers of its own -- scrolling, typing and app switches all
-/// invalidate the geometry, and drifting squiggles over moved text are actively misleading, so the
+/// invalidate the geometry, and drifting underlines over moved text are actively misleading, so the
 /// underlines simply go away until the next check. Issues whose bounds the app will not report
 /// (Electron/web fields) are skipped silently -- the feature degrades to the popup-only behavior.
 @MainActor
@@ -60,7 +60,7 @@ final class UnderlineOverlay {
                 .insetBy(dx: -8, dy: -8)
         }
 
-        // The squiggles hang below their words, so the panel needs a little room under the field --
+        // The underlines hang below their words, so the panel needs a little room under the field --
         // otherwise the last line's underline is clipped away.
         let margin = UnderlineGeometry.underlineDrop + 4
         let panelFrame = field.insetBy(dx: 0, dy: -margin)
@@ -124,7 +124,7 @@ final class UnderlineOverlay {
 
     // MARK: - Hide triggers
 
-    /// Scrolling and window moves shift the text under the squiggles, so re-measure and follow it.
+    /// Scrolling and window moves shift the text under the underlines, so re-measure and follow it.
     /// (Typing is handled by the controller: it hides the underlines and re-checks after the pause.)
     /// An app switch means this field is no longer on screen: hide.
     private func installHideTriggers() {
@@ -178,26 +178,22 @@ final class UnderlineOverlay {
 
 // MARK: - Drawing
 
-/// Strokes a squiggle along the bottom edge of each segment rect.
+/// Strokes a straight line just below each segment rect.
 private final class UnderlineView: NSView {
     var segments: [(rect: CGRect, color: NSColor)] = [] {
         didSet { needsDisplay = true }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        for segment in segments {
-            let points = UnderlineGeometry.squigglePoints(width: segment.rect.width,
-                                                          amplitude: 2.5, wavelength: 5)
-            guard points.count > 1 else { continue }
+        for segment in segments where segment.rect.width > 0 {
+            let y = segment.rect.minY - UnderlineGeometry.underlineDrop
             let path = NSBezierPath()
-            path.lineWidth = 2.5
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            let baseline = segment.rect.minY - UnderlineGeometry.underlineDrop
-            path.move(to: NSPoint(x: segment.rect.minX + points[0].x, y: baseline + points[0].y))
-            for p in points.dropFirst() {
-                path.line(to: NSPoint(x: segment.rect.minX + p.x, y: baseline + p.y))
-            }
+            path.lineWidth = UnderlineGeometry.underlineThickness
+            // Butt caps keep the line exactly as wide as the word, so the underlines of two
+            // neighbouring flagged words do not run together across the space between them.
+            path.lineCapStyle = .butt
+            path.move(to: NSPoint(x: segment.rect.minX, y: y))
+            path.line(to: NSPoint(x: segment.rect.maxX, y: y))
             segment.color.withAlphaComponent(0.95).setStroke()
             path.stroke()
         }

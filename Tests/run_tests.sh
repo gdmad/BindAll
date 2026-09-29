@@ -18,11 +18,13 @@ swiftc -O \
     BindAll/Proofread/ProofreadCache.swift \
     BindAll/Proofread/ProofreadLanguage.swift \
     BindAll/Proofread/RecheckPolicy.swift \
+    BindAll/Proofread/ProofreadClickPolicy.swift \
     BindAll/UI/PopupTilePacker.swift \
     BindAll/Engines/LanguageToolEngine.swift \
     BindAll/Autocomplete/AutocompleteEngine.swift \
     BindAll/Autocomplete/AutocompleteLearningStore.swift \
     BindAll/Autocomplete/LearnedWordAudit.swift \
+    BindAll/Autocomplete/AutocompleteInsertion.swift \
     Tests/main.swift \
     -o "$OUT"
 

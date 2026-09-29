@@ -9,9 +9,8 @@ struct ProofreadSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: $appState.settings.correctEnabled) {
-                    helpHeader("Enable Proofread", "Checks the text field you are typing in with a LanguageTool server shortly after you pause, and underlines every issue in place. Click an underlined word to see the fixes. The public server sends text to languagetool.org; use a self-hosted server for full privacy.")
-                }
+                toggleRow("Enable Proofread", "Checks the text field you are typing in with a LanguageTool server shortly after you pause, and underlines every issue in place. Click an underlined word to see the fixes. The public server sends text to languagetool.org; use a self-hosted server for full privacy.",
+                         isOn: $appState.settings.correctEnabled)
             } header: {
                 Text("Proofread (LanguageTool)")
             }

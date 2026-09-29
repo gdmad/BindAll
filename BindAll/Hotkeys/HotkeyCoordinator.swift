@@ -1,10 +1,13 @@
 import AppKit
 import SwiftUI
 import Combine
+import os
 
 /// Wires global hotkeys to the selection → engine/translation pipeline.
 @MainActor
 final class HotkeyCoordinator: ObservableObject {
+    private static let log = Logger(subsystem: "com.evgeny.bindall", category: "hotkeys")
+
     private let appState: AppState
     private let monitor = HotkeyMonitor()
     private let translationCoordinator = TranslationCoordinator()
@@ -37,7 +40,9 @@ final class HotkeyCoordinator: ObservableObject {
             self?.handleBurst(keyCode: keyCode, modifiers: mods, count: count)
         }
         reconfigureWatched()
-        _ = monitor.start()
+        if !monitor.start() {
+            Self.log.error("hotkey monitor failed to start (trusted=\(AccessibilityPermission.isGranted, privacy: .public))")
+        }
         updateAutocomplete()
         updateProofread()
 
@@ -59,9 +64,15 @@ final class HotkeyCoordinator: ObservableObject {
                 self.refreshStatus()
                 if !self.monitor.isRunning, AccessibilityPermission.isGranted {
                     self.reconfigureWatched()
-                    _ = self.monitor.start()
+                    if !self.monitor.start() {
+                        Self.log.error("hotkey monitor retry failed to start")
+                    }
                 }
                 self.updateAutocomplete()
+                // Proofread's monitors have their own guard against a permission grant that arrived
+                // after they last tried to install -- see ProofreadController.configure(). Calling it
+                // every tick is what lets that self-heal without a relaunch.
+                self.updateProofread()
             }
         }
     }
@@ -81,7 +92,8 @@ final class HotkeyCoordinator: ObservableObject {
         cfg.appMode = AutocompleteController.AppFilterMode(rawValue: s.autocompleteAppMode) ?? .all
         cfg.apps = Set(s.autocompleteApps)
         autocomplete.configure(cfg)
-        if appState.settings.autocompleteEnabled, AccessibilityPermission.isGranted {
+        // The master switch stands everything down, per the "BindAll enabled" toggle's own help text.
+        if s.enabled, s.autocompleteEnabled, AccessibilityPermission.isGranted {
             autocomplete.start()
         } else {
             autocomplete.stop()
@@ -93,7 +105,8 @@ final class HotkeyCoordinator: ObservableObject {
     private func updateProofread() {
         let s = appState.settings
         var cfg = ProofreadController.Config()
-        cfg.enabled = s.correctEnabled
+        // The master switch stands everything down, per the "BindAll enabled" toggle's own help text.
+        cfg.enabled = s.enabled && s.correctEnabled
         cfg.maxReplacements = s.proofreadMaxReplacements
         cfg.layout = s.proofreadLayout
         cfg.fontSize = CGFloat(max(10, min(20, s.popupFontSize)))
@@ -122,6 +135,7 @@ final class HotkeyCoordinator: ObservableObject {
 
     func refreshStatus() {
         appState.accessibilityGranted = AccessibilityPermission.isGranted
+        appState.hotkeysActive = monitor.isRunning
         appState.appleEngineStatus = AppleFoundationEngine.availabilityStatus().message
     }
 

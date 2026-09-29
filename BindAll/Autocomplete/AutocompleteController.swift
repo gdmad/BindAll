@@ -492,9 +492,11 @@ final class AutocompleteController {
                 me.candidates = list
                 me.selectedIndex = 0
                 me.lastAnchor = resolvedAnchor
+                // Arm the suppressor before the popup becomes visible on screen, not after -- Tab
+                // pressed in the gap between the two used to reach the target app instead of us.
+                me.syncSuppression()
                 me.overlay.show(list, selected: 0, layout: cfg.layout, fontSize: cfg.fontSize,
                                 anchor: resolvedAnchor)
-                me.syncSuppression()
             }
         }
     }
@@ -542,9 +544,9 @@ final class AutocompleteController {
                 me.candidates = words
                 me.selectedIndex = 0
                 me.lastAnchor = anchor
+                me.syncSuppression()
                 me.overlay.show(words, selected: 0, layout: cfg.layout, fontSize: cfg.fontSize,
                                 anchor: anchor)
-                me.syncSuppression()
             }
         }
     }
@@ -744,11 +746,23 @@ final class AutocompleteController {
         return length > 0 ? String(utf16CodeUnits: chars, count: length) : ""
     }
 
-    /// Replaces the typed partial with the chosen word. Always deletes the partial and types the full
-    /// word so the inserted text matches the (recased) suggestion exactly, in every app.
+    /// Replaces the typed partial with the chosen word -- see `AutocompleteInsertion` for why this
+    /// appends rather than always deleting and retyping.
     private func insert(word: String, replacing partial: String) {
-        deleteBackward(count: (partial as NSString).length)
-        typeString(word)
+        switch AutocompleteInsertion.plan(partial: partial, word: word) {
+        case .append(let suffix):
+            typeString(suffix)
+        case .replace(let deleteCount, let full):
+            deleteBackward(count: deleteCount)
+            guard deleteCount > 0 else { typeString(full); return }
+            // Give the app's editor a moment to process the deletion before retyping -- the same gap
+            // TextInjector uses elsewhere in this codebase. Without it, an editor that reacts to an
+            // emptied field (Slack's composer does) can still be mid-rebuild when the replacement
+            // text arrives, and swallow it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.typeString(full)
+            }
+        }
     }
 
     private func typeString(_ s: String) {

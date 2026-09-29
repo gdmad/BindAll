@@ -6,6 +6,12 @@ struct OpenAICompatibleEngine: AIEngine {
     let apiKey: String
     let model: String
     let requiresAPIKey: Bool
+    /// Only for error text ("DeepSeek rejected the API key…") -- never sent on the wire. Optional so
+    /// existing call sites that do not have a display name handy still compile; defaults to a generic
+    /// "the provider" in messages.
+    var providerName: String = ""
+
+    private var providerLabel: String { providerName.isEmpty ? "The provider" : providerName }
 
     private func endpoint(_ path: String) throws -> URL {
         var base = baseURL.trimmingCharacters(in: .whitespaces)
@@ -42,7 +48,7 @@ struct OpenAICompatibleEngine: AIEngine {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: req)
-        try Self.validate(response: response, data: data)
+        try validate(response: response, data: data)
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
@@ -55,32 +61,23 @@ struct OpenAICompatibleEngine: AIEngine {
         return trimmed
     }
 
+    /// `/models` is a listing endpoint, not an auth check -- OpenRouter's answers it publicly, with
+    /// any key or none at all. The only request that actually exercises the key is a real chat
+    /// completion, so that is what this always does (a `:free` OpenRouter model costs nothing).
     func testConnection() async throws -> String {
         if requiresAPIKey && apiKey.isEmpty { throw EngineError.missingAPIKey }
-        let url = try endpoint("/models")
-        let req = makeRequest(url: url, method: "GET")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            try Self.validate(response: response, data: data)
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let arr = json["data"] as? [[String: Any]] {
-                return "Connected — \(arr.count) models available"
-            }
-            return "Connected"
-        } catch {
-            // Some providers don't expose /models; fall back to a tiny completion.
-            _ = try await process(text: "ping", instruction: "Reply with OK.")
-            return "Connected"
-        }
+        _ = try await process(text: "ping", instruction: "Reply with OK.")
+        return "Connected"
     }
 
     /// Fetches available model identifiers (best effort).
     /// - Parameter freeOnly: when true, keeps only free models (id ending in ":free" or zero pricing).
     func listModels(freeOnly: Bool = false) async throws -> [String] {
+        if requiresAPIKey && apiKey.isEmpty { throw EngineError.missingAPIKey }
         let url = try endpoint("/models")
         let req = makeRequest(url: url, method: "GET")
         let (data, response) = try await URLSession.shared.data(for: req)
-        try Self.validate(response: response, data: data)
+        try validate(response: response, data: data)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let arr = json["data"] as? [[String: Any]] else { return [] }
         return arr
@@ -89,10 +86,13 @@ struct OpenAICompatibleEngine: AIEngine {
             .sorted()
     }
 
-    private static func validate(response: URLResponse, data: Data) throws {
+    private func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw EngineError.network("\(providerLabel) rejected the API key (HTTP \(http.statusCode)). Check the key on the Providers tab -- it may be missing, wrong, or belong to a different provider. \(body.prefix(200))")
+            }
             throw EngineError.network("HTTP \(http.statusCode): \(body.prefix(300))")
         }
     }

@@ -13,7 +13,8 @@ enum EngineFactory {
                 baseURL: config.effectiveBaseURL,
                 apiKey: appState.apiKey(for: kind),
                 model: config.model,
-                requiresAPIKey: kind.requiresAPIKey
+                requiresAPIKey: kind.requiresAPIKey,
+                providerName: kind.displayName
             )
         }
     }

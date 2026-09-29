@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// A registered hotkey the monitor should watch for.
 struct WatchedHotkey: Hashable {
@@ -15,6 +16,8 @@ final class HotkeyMonitor {
     /// How long a burst waits for another press before firing (when more presses are still possible).
     /// A single app-wide constant; it is not a user-facing or stored setting.
     static let burstWindow: TimeInterval = 0.35
+
+    private static let log = Logger(subsystem: "com.evgeny.bindall", category: "hotkeys")
 
     /// Called on the main thread when a burst of identical presses ends.
     var onBurst: ((UInt16, HotkeyModifiers, Int) -> Void)?
@@ -33,10 +36,22 @@ final class HotkeyMonitor {
         watched = hotkeys
     }
 
-    var isRunning: Bool { eventTap != nil }
+    /// True only while the tap is both installed and enabled. The system can disable a live tap (e.g.
+    /// after a timeout) without tearing it down, so `eventTap != nil` alone is not enough to know the
+    /// monitor is actually receiving events -- see the retry logic in `HotkeyCoordinator`.
+    var isRunning: Bool {
+        guard let eventTap else { return false }
+        return CGEvent.tapIsEnabled(tap: eventTap)
+    }
 
     func start() -> Bool {
-        guard eventTap == nil else { return true }
+        if let eventTap {
+            if CGEvent.tapIsEnabled(tap: eventTap) { return true }
+            // A previously created tap the system disabled and never re-enabled: tear it down and
+            // recreate, rather than leaving hotkeys dead until the app restarts.
+            Self.log.notice("hotkey tap exists but is disabled; recreating")
+            stop()
+        }
         let mask = (1 << CGEventType.keyDown.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
@@ -44,6 +59,7 @@ final class HotkeyMonitor {
             if type == .keyDown {
                 monitor.handle(event: event)
             } else if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                HotkeyMonitor.log.notice("hotkey tap disabled (\(type == .tapDisabledByTimeout ? "timeout" : "user input", privacy: .public)); re-enabling")
                 if let tap = monitor.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
             }
             return Unmanaged.passUnretained(event)
@@ -57,6 +73,7 @@ final class HotkeyMonitor {
             callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
+            Self.log.error("tapCreate failed (accessibility=\(AccessibilityPermission.isGranted, privacy: .public), inputMonitoring=\(AccessibilityPermission.listenEventAccessGranted, privacy: .public))")
             return false
         }
 

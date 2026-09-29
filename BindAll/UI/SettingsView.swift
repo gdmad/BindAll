@@ -58,6 +58,18 @@ func helpHeader(_ title: String, _ help: String) -> some View {
     }
 }
 
+/// A Form-row toggle whose label carries a help hint. Keeps the hint's own `Button` out of the
+/// Toggle's tappable label -- nesting a control inside `Toggle(isOn:label:)`'s label works most of
+/// the time, but the label's whole area is the toggle's hit target, so a tap that lands on the help
+/// icon can end up fighting the toggle for it instead of reliably opening the popover.
+func toggleRow(_ title: String, _ help: String, isOn: Binding<Bool>) -> some View {
+    LabeledContent {
+        Toggle("", isOn: isOn).labelsHidden()
+    } label: {
+        helpHeader(title, help)
+    }
+}
+
 // MARK: - General
 
 struct GeneralSettingsView: View {
@@ -66,9 +78,8 @@ struct GeneralSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: $appState.settings.enabled) {
-                    helpHeader("BindAll enabled", "The master switch, the same one the menu bar carries. Off: the global shortcuts, autocomplete and proofreading all stand down until it is back on.")
-                }
+                toggleRow("BindAll enabled", "The master switch, the same one the menu bar carries. Off: the global shortcuts, autocomplete and proofreading all stand down until it is back on.",
+                         isOn: $appState.settings.enabled)
                 Toggle("Launch at login", isOn: Binding(
                     get: { LoginItemManager.isEnabled },
                     set: { LoginItemManager.apply($0) }
@@ -78,15 +89,12 @@ struct GeneralSettingsView: View {
             }
 
             Section("Output") {
-                Toggle(isOn: $appState.settings.restoreClipboard) {
-                    helpHeader("Restore clipboard after replacing", "When replacing the selection, BindAll puts the result on the clipboard and pastes it. With this on, your previous clipboard contents are restored a moment after pasting, so the tool does not overwrite what you had copied. Off: the result stays on the clipboard.")
-                }
-                Toggle(isOn: $appState.settings.maskAISlop) {
-                    helpHeader("Mask AI Slop", "Normalizes typical 'AI' typography in results: em/en dashes become '-', smart quotes and apostrophes become straight ones, and emoji and unusual unicode are stripped.")
-                }
-                Toggle(isOn: $appState.settings.historyEnabled) {
-                    helpHeader("Keep history", "Stores the last 50 results locally (menu bar > History) so a closed popup or overwritten paste can be recovered. Stored on this Mac only; never includes API keys.")
-                }
+                toggleRow("Restore clipboard after replacing", "When replacing the selection, BindAll puts the result on the clipboard and pastes it. With this on, your previous clipboard contents are restored a moment after pasting, so the tool does not overwrite what you had copied. Off: the result stays on the clipboard.",
+                         isOn: $appState.settings.restoreClipboard)
+                toggleRow("Mask AI Slop", "Normalizes typical 'AI' typography in results: em/en dashes become '-', smart quotes and apostrophes become straight ones, and emoji and unusual unicode are stripped.",
+                         isOn: $appState.settings.maskAISlop)
+                toggleRow("Keep history", "Stores the last 50 results locally (menu bar > History) so a closed popup or overwritten paste can be recovered. Stored on this Mac only; never includes API keys.",
+                         isOn: $appState.settings.historyEnabled)
             }
 
             Section {
@@ -104,9 +112,16 @@ struct GeneralSettingsView: View {
                         Button("Grant Access…") { AccessibilityPermission.openSystemSettings() }
                     }
                 }
+                LabeledContent("Global shortcuts") {
+                    if appState.hotkeysActive {
+                        Label("Active", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Label("Not active", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                }
                 LabeledContent("Apple on-device model", value: appState.appleEngineStatus)
             } header: {
-                helpHeader("Status", "Live status. Accessibility is required for the global shortcuts and for pasting results back into the active app. Apple on-device model shows whether Apple Intelligence is available for the on-device engine.")
+                helpHeader("Status", "Live status. Accessibility is required for the global shortcuts and for pasting results back into the active app. \"Global shortcuts\" can show Not active even with Accessibility granted -- that means the permission is stale (common right after a macOS upgrade); remove BindAll from the Accessibility list in System Settings and grant it again. Apple on-device model shows whether Apple Intelligence is available for the on-device engine.")
             }
 
             Section("About") {

@@ -38,7 +38,10 @@ struct ProvidersSettingsView: View {
 
             Section {
                 Picker("Provider", selection: $selectedKind) {
-                    ForEach(cloudKinds) { Text($0.displayName).tag($0) }
+                    ForEach(cloudKinds) { kind in
+                        Text(kind == appState.settings.defaultEngine ? "\(kind.displayName) — active" : kind.displayName)
+                            .tag(kind)
+                    }
                 }
                 // The draft is already saved keystroke by keystroke, so switching providers only has
                 // to reload -- saving here would write the old provider's key under the new one.
@@ -128,8 +131,12 @@ struct ProvidersSettingsView: View {
     }
 
     private func saveKey(for kind: ProviderKind) {
-        guard kind.requiresAPIKey, apiKeyDraft != appState.apiKey(for: kind) else { return }
-        appState.setAPIKey(apiKeyDraft, for: kind)
+        guard kind.requiresAPIKey else { return }
+        // A key pasted from a browser or password manager often carries a trailing newline or space,
+        // which is invisible in the field but turns into a silently-rejected Authorization header.
+        let trimmed = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != appState.apiKey(for: kind) else { return }
+        appState.setAPIKey(trimmed, for: kind)
     }
 
     private func loadForSelection() {
@@ -167,7 +174,8 @@ struct ProvidersSettingsView: View {
             baseURL: config.effectiveBaseURL,
             apiKey: appState.apiKey(for: selectedKind),
             model: config.model,
-            requiresAPIKey: selectedKind.requiresAPIKey
+            requiresAPIKey: selectedKind.requiresAPIKey,
+            providerName: selectedKind.displayName
         )
         let freeOnly = selectedKind == .openrouter && appState.settings.openRouterFreeOnly
         Task {

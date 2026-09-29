@@ -7,8 +7,10 @@ import os
 /// Two ways in:
 ///   - the Proofread shortcut checks the whole field and starts at the first issue;
 ///   - a single click inside a problem word pops the fixes for it up on its own.
-/// Either way the current issue is selected in the user's own field (`kAXSelectedTextRange`), so the
-/// highlight is drawn natively by the app and we never paint over anyone's text.
+/// The current issue is never selected in the user's own field -- its underline already marks it,
+/// and leaving a selection behind fought both the app's own UI (Slack's formatting toolbar lands on
+/// a selection) and the user's own editing (one Backspace would delete the whole selected word). See
+/// `showCurrent()`.
 ///
 /// Threading: an active `CGEventTap` is only alive while the popup is showing, and its callback does
 /// nothing but read a lock-protected snapshot and hand the key to main. See `AutocompleteController`
@@ -49,6 +51,9 @@ final class ProofreadController {
     /// True while a check started from a click (one that carries the clicked word) is in flight. The
     /// post-write re-check stands down for it rather than cancelling it -- see `RecheckPolicy`.
     private var pendingSelectionCheck = false
+    /// Accessibility state as of the last `configure()`, so a false -> true transition can force a
+    /// fresh monitor install (see `configure`).
+    private var lastAXGranted = false
 
     /// Typing pause that triggers a live re-check.
     private let typingPause: TimeInterval = 0.6
@@ -93,8 +98,6 @@ final class ProofreadController {
     private var mouseMonitor: Any?
     private var appSwitchObserver: NSObjectProtocol?
     private var clickDebounce: DispatchWorkItem?
-    /// A double-click/drag selection longer than this is the user copying text, not fixing a word.
-    private let maxAutoSelection = 40
 
     /// Set by the coordinator so a proofread session can silence autocomplete: both features eat Tab.
     var onSessionChange: ((Bool) -> Void)?
@@ -108,6 +111,18 @@ final class ProofreadController {
         let provider = self.provider ?? LanguageToolProofreadProvider(engine: engine, language: language)
         self.provider = provider
         Task { await provider.configure(engine: engine, language: language) }
+
+        // `NSEvent.addGlobalMonitorForEvents` for .keyDown silently fails without Accessibility, and
+        // the monitor-installed guards below then block a retry forever. Force a fresh install the
+        // moment permission actually becomes available, instead of waiting for the app to restart.
+        let granted = AccessibilityPermission.isGranted
+        let justGranted = granted && !lastAXGranted
+        lastAXGranted = granted
+        if justGranted, config.enabled {
+            Self.log.notice("Accessibility just granted; reinstalling proofread monitors")
+            stopClickMonitor()
+            stopTypingMonitor()
+        }
 
         if config.enabled {
             startClickMonitor()
@@ -141,12 +156,14 @@ final class ProofreadController {
         guard found.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= config.minLength else { return }
 
         var probe: NSRange
-        if found.selection.length > 0 {
-            // Double-click or drag: reuse the selection when it is word-sized; a long selection is
-            // the user copying text, so stay quiet.
-            guard found.selection.length <= maxAutoSelection else { return }
-            probe = found.selection
-        } else if let word = WordBoundary.wordRange(at: found.caret, in: found.text) {
+        switch ProofreadClickPolicy.action(selection: found.selection, caret: found.caret, in: found.text) {
+        case .ignore:
+            return
+        case .dismiss:
+            // Clicked whitespace or an empty spot: close the popup but keep the underlines.
+            endNavigation()
+            return
+        case .probe(let word):
             probe = word
             // The caret comes from the app's selection, which in Chromium is indexed differently
             // from the value we measured the word in. Translate it back into our offsets, so the
@@ -158,10 +175,6 @@ final class ProofreadController {
                                                      in: found.text) {
                 probe = ourRange
             }
-        } else {
-            // Clicked whitespace or an empty spot: close the popup but keep the underlines.
-            endNavigation()
-            return
         }
 
         let sameField = target?.element == found.element
@@ -294,18 +307,20 @@ final class ProofreadController {
         guard index >= 0, index < issues.count else { endNavigation(); return }
         currentIndex = index
         selectedReplacement = 0
-        showCurrent(select: true)
+        showCurrent()
         setActive(true)
     }
 
-    /// Shows the popup for the current issue. `select` also highlights it in the user's field.
-    private func showCurrent(select: Bool) {
+    /// Shows the popup for the current issue. Never highlights the word in the user's field: editors
+    /// put their own controls over a selection -- Slack's formatting toolbar lands exactly where the
+    /// popup would -- and a selection left behind after the popup closes is what made a single
+    /// Backspace delete the whole word instead of one character. The underline already says which
+    /// word this is about, and `IssueApplier` selects the range itself, right before pasting, when a
+    /// fix is accepted.
+    private func showCurrent() {
         guard currentIndex < issues.count else { endNavigation(); return }
         let issue = issues[currentIndex]
 
-        if select, let element = target?.element {
-            ProofreadAX.select(issue.range, in: element)
-        }
         popover.show(issue: issue, selected: selectedReplacement,
                      position: "\(currentIndex + 1) of \(issues.count)",
                      anchor: anchor(for: issue),
@@ -320,7 +335,7 @@ final class ProofreadController {
         guard let issue = issues[safe: currentIndex], index >= 0, index < issue.replacements.count,
               index != selectedReplacement else { return }
         selectedReplacement = index
-        showCurrent(select: false)
+        showCurrent()
     }
 
     /// Mouse click on a row: same path as selecting it with arrows and pressing Return.
@@ -334,7 +349,7 @@ final class ProofreadController {
         let issue = issues[safe: currentIndex]
         guard let count = issue?.replacements.count, count > 0 else { return }
         selectedReplacement = max(0, min(count - 1, selectedReplacement + delta))
-        showCurrent(select: false)
+        showCurrent()
     }
 
     /// Moves the fix selection inside the two-row tile grid.
@@ -343,7 +358,7 @@ final class ProofreadController {
         selectedReplacement = PopupLayout.tileIndex(from: selectedReplacement, deltaX: dx, deltaY: dy,
                                                     count: issue.replacements.count,
                                                     topRowCount: popover.lastTileTopCount)
-        showCurrent(select: false)
+        showCurrent()
     }
 
     /// Routes an arrow key by layout. The column keeps fixes on the vertical axis and problem
@@ -415,9 +430,16 @@ final class ProofreadController {
             underlines.hide()
             recheckAfterWrite(previousText: lastCheckedText, resumeAt: fixedIndex)
         case .stale:
-            // Force the next pause to re-check: what we knew about the field no longer holds.
+            // The message promises a re-check, so actually run one instead of waiting for the user
+            // to type again -- they just clicked a fix and are looking at the field, not typing.
+            // The issue that failed keeps its place in the list, so the popup can reopen on it.
+            let staleIndex = currentIndex
             lastCheckedText = ""
-            flash("The text changed - checking again…")
+            flash("The text moved - checking again…")
+            endNavigation()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.typingPaused(resumeIndex: staleIndex)
+            }
         case .failed(let reason):
             flash(reason)
         }
@@ -529,7 +551,10 @@ final class ProofreadController {
         }
         guard let created = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                               options: .defaultTap, eventsOfInterest: CGEventMask(mask),
-                                              callback: callback, userInfo: userInfo) else { return }
+                                              callback: callback, userInfo: userInfo) else {
+            Self.log.error("proofread tapCreate failed (accessibility=\(AccessibilityPermission.isGranted, privacy: .public), inputMonitoring=\(AccessibilityPermission.listenEventAccessGranted, privacy: .public))")
+            return
+        }
         tap = created
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, created, 0)
         tapSource = source

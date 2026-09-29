@@ -102,11 +102,19 @@ struct LanguageToolEngine: Equatable {
         }
     }
 
+    /// Rules that are right by the book but wrong for what people type into a chat box: nearly every
+    /// message starts in lowercase, so "this sentence does not start with an uppercase letter" put a
+    /// permanent underline on the first word of everything. Filtered here, where matches become
+    /// underlines, and not with the request's `disabledRules`: `correct()` shares this engine, and
+    /// capitalising the start is a legitimate fix when the user asks to correct a selection.
+    static let ignoredProofreadRules: Set<String> = ["UPPERCASE_SENTENCE_START"]
+
     /// Maps matches onto the shared issue model. Matches whose range falls outside `text` are dropped
     /// rather than trusted: a bad offset would make the applier edit the wrong characters.
     static func issues(from matches: [LTMatch], text: String) -> [TextIssue] {
         let ns = text as NSString
         return matches.compactMap { m in
+            if let ruleId = m.ruleId, ignoredProofreadRules.contains(ruleId) { return nil }
             let range = NSRange(location: m.offset, length: m.length)
             guard NSMaxRange(range) <= ns.length else { return nil }
             let short = m.shortMessage.isEmpty ? m.message : m.shortMessage

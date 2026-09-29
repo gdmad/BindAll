@@ -12,6 +12,11 @@ final class AppState: ObservableObject {
 
     /// Live Accessibility permission status (updated by the coordinator).
     @Published var accessibilityGranted: Bool = false
+    /// Whether the global hotkey tap is actually installed and enabled right now (updated by the
+    /// coordinator) -- distinct from `accessibilityGranted`: the permission can show as granted in
+    /// System Settings while the tap itself is stale or was never (re)installed. Surfacing this
+    /// separately in Status is what makes that state visible instead of silently doing nothing.
+    @Published var hotkeysActive: Bool = false
     /// Human-readable Apple Intelligence availability status.
     @Published var appleEngineStatus: String = "Unknown"
     /// True while an action/translation is running (drives the menu-bar icon).

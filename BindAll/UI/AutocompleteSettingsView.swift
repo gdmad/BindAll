@@ -9,9 +9,8 @@ struct AutocompleteSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: $appState.settings.autocompleteEnabled) {
-                    helpHeader("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Works in most apps; skipped in password fields.")
-                }
+                toggleRow("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Works in most apps; skipped in password fields.",
+                         isOn: $appState.settings.autocompleteEnabled)
             } header: {
                 Text("Autocomplete")
             }
@@ -40,15 +39,12 @@ struct AutocompleteSettingsView: View {
 
             Section("Behavior") {
                 Toggle("Accept with Return too", isOn: $appState.settings.autocompleteAcceptReturn)
-                Toggle(isOn: $appState.settings.autocompleteNextWord) {
-                    helpHeader("Predict next word", "After a space, suggest the most likely next word, learned from what you have typed before.")
-                }
-                Toggle(isOn: $appState.settings.autocompleteLearn) {
-                    helpHeader("Learn from what you type", "Remembers the words you use (and which follow which) to rank suggestions and power next-word prediction. Stored locally; words only.")
-                }
-                Toggle(isOn: $appState.settings.autocompleteContextRanking) {
-                    helpHeader("Rank by context", "Ranks completions using the words before the caret (bundled Russian n-gram data plus what you have typed before), instead of a fixed order.")
-                }
+                toggleRow("Predict next word", "After a space, suggest the most likely next word, learned from what you have typed before.",
+                         isOn: $appState.settings.autocompleteNextWord)
+                toggleRow("Learn from what you type", "Remembers the words you use (and which follow which) to rank suggestions and power next-word prediction. Stored locally; words only.",
+                         isOn: $appState.settings.autocompleteLearn)
+                toggleRow("Rank by context", "Ranks completions using the words before the caret (bundled Russian n-gram data plus what you have typed before), instead of a fixed order.",
+                         isOn: $appState.settings.autocompleteContextRanking)
                 LabeledContent("Learned words") {
                     HStack {
                         Text("\(learnedCount)").foregroundStyle(.secondary)

@@ -1,5 +1,8 @@
 import AppKit
 import ApplicationServices
+import os
+
+private let log = Logger(subsystem: "com.evgeny.bindall", category: "proofread-ax")
 
 /// The focused text field, its contents and the caret/selection.
 struct ProofTarget {
@@ -44,6 +47,13 @@ enum ProofreadAX {
 
             var pid: pid_t = 0
             AXUIElementGetPid(candidate, &pid)
+            // A web area's own pid is often a renderer/helper process, distinct from the frontmost
+            // app pid that `enableElectronAccessibilityIfNeeded` tested -- without this, `isChromium`
+            // would read false for the one pid that actually matters (IssueApplier, showCurrent).
+            if pid != 0, let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+               pid != frontPid, chromiumPids.contains(frontPid) {
+                chromiumPids.insert(pid)
+            }
             return .axField(ProofTarget(element: candidate, pid: pid, text: text,
                                         caret: selection.location, selection: selection))
         }
@@ -64,13 +74,23 @@ enum ProofreadAX {
     /// doubles as a reliable "this is an Electron/Chromium app" test.
     private static var chromiumPids = Set<pid_t>()
 
+    /// Every AX call below is synchronous and made from the main thread, so a hung or slow target
+    /// app would otherwise hang BindAll's own UI (and its active proofread tap) along with it.
+    private static let axMessagingTimeout: Float = 0.25
+
     static func enableElectronAccessibilityIfNeeded() {
         guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               !accessibilityEnabledPids.contains(pid) else { return }
-        accessibilityEnabledPids.insert(pid)
         let app = AXUIElementCreateApplication(pid)
+        // Building a Chromium app's whole accessibility tree on this call can take longer than the
+        // messaging timeout below -- set it only afterwards, or the timeout cuts off detection itself
+        // and every Chromium app (Slack included) is permanently misread as native.
         let status = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        if status == .success { chromiumPids.insert(pid) }
+        if status == .success {
+            chromiumPids.insert(pid)
+            accessibilityEnabledPids.insert(pid)
+        } // else: retry next time -- a slow success now looks identical to a real native app
+        AXUIElementSetMessagingTimeout(app, axMessagingTimeout)
         AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
     }
 
@@ -196,14 +216,22 @@ enum ProofreadAX {
     /// answers but nothing nearby matches, and `range` unchanged when it cannot answer at all.
     static func alignedRange(_ range: NSRange, expecting original: String, in element: AXUIElement,
                              contextBefore: String = "", contextAfter: String = "",
-                             window: Int = 16) -> NSRange? {
+                             window: Int? = nil) -> NSRange? {
         guard let here = string(for: range, in: element) else { return range } // app cannot tell us
         if here == original, contextMatches(range, contextBefore, contextAfter, in: element) {
             return range
         }
+        // The window scales with how far into the text the range sits: a fixed small window is what
+        // let this silently give up on long documents where an app's own offset drift grows with
+        // position (observed after a macOS upgrade changed an app's AX offset bookkeeping). But that
+        // only works when there is a context snapshot to confirm a candidate against -- with none,
+        // `contextMatches` is a no-op (nothing to compare), and scanning wide bumped straight into
+        // trying +1 first at the end of a field, landing on the neighbouring text instead of refusing.
+        let hasContext = !contextBefore.isEmpty || !contextAfter.isEmpty
+        let effectiveWindow = window ?? (hasContext ? max(16, min(256, range.location / 20)) : 16)
         // Offsets disagree: probe outwards, nearest first, and take the first match the surrounding
         // text agrees with -- the same word can sit elsewhere in the field.
-        for distance in 1...window {
+        for distance in 1...effectiveWindow {
             for offset in [distance, -distance] {
                 let candidate = NSRange(location: range.location + offset, length: range.length)
                 guard candidate.location >= 0, string(for: candidate, in: element) == original,
@@ -211,6 +239,7 @@ enum ProofreadAX {
                 return candidate
             }
         }
+        log.debug("alignedRange found nothing matching near \(range.location, privacy: .public) within ±\(effectiveWindow, privacy: .public)")
         return nil
     }
 

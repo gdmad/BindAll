@@ -41,6 +41,7 @@ BindAll/
 │   ├── AutocompleteController.swift   # two CGEventTaps on own thread (listen-only monitor + active suppressor); AX/keystroke word; suggestions, next-word, accept
 │   ├── AutocompleteLearningStore.swift# learned counts + bi/trigrams; next-word backoff + RU seed; contextScore() ranks completions by preceding words (thread-safe)
 │   ├── LearnedWordAudit.swift         # pure: which learned words look like typos (dictionary check comes in as a closure)
+│   ├── AutocompleteInsertion.swift    # pure: append the suggestion's remainder vs. delete-and-retype (never passes through an empty field)
 │   ├── SemanticRanker.swift           # experimental: NLContextualEmbedding (Cyrillic) cosine re-ranking, debug-only
 │   ├── ru_bigrams_ctx.txt             # RU bigram seed (Leipzig news, CC BY 4.0) -- feeds both next-word and completion ranking
 │   ├── ru_trigrams.txt                # RU trigram seed (Leipzig news, CC BY 4.0) for completion ranking
@@ -54,26 +55,35 @@ BindAll/
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
 │   ├── IssueApplier.swift             # validated single fix: AX write, else verified select+paste
 │   ├── WordBoundary.swift             # word range under the caret (click-to-proofread trigger)
-│   ├── UnderlineGeometry.swift        # pure geometry: rect flip, squiggle path, underline drop, line check
+│   ├── UnderlineGeometry.swift        # pure geometry: rect flip, underline drop/thickness, line check
 │   ├── IssueKindStyle.swift           # one source of truth for issue-kind color and symbol
 │   ├── RecheckPolicy.swift            # pure: whether the post-write pass re-checks (defers to a click's check)
-│   ├── UnderlineOverlay.swift         # click-through panel with squiggles under all found issues
+│   ├── ProofreadClickPolicy.swift     # pure: what a click does (probe a word / dismiss / ignore a selection)
+│   ├── UnderlineOverlay.swift         # click-through panel with a straight underline under every found issue
 │   └── ProofreadController.swift      # session, key tap (only while the popup is up), click popup
 ├── Actions/
 │   ├── PromptParser.swift      # separator split + action-key resolution
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
 │   └── MaskAISlop.swift        # typography normalizer (dashes/quotes/emoji)
 ├── UI/
-│   ├── SettingsView.swift      # tabs: General, Actions, Translation, Autocomplete, Proofread, Providers (each feature owns its tab, including its on/off switch)
+│   ├── SettingsView.swift      # tabs: General, Actions, Translation, Autocomplete, Proofread, Providers (each feature owns its tab, including its on/off switch); `toggleRow(title, help, isOn:)` is the shared pattern for a Form toggle with a help hint -- keeps the hint's `Button` out of the Toggle's own label
 │   ├── AutocompleteSettingsView.swift  # autocomplete tab (on/off, count, layout, language, learning, per-app)
 │   ├── ProofreadSettingsView.swift     # proofread tab (on/off, fixes, layout, language, per-app)
 │   ├── AppFilterSection.swift          # shared per-app allow/deny section (autocomplete + proofread)
 │   ├── ActionKeysSettingsView.swift
 │   ├── ProvidersSettingsView.swift     # engine picker + AI providers (keys, models)
 │   ├── LanguageToolConnectionSection.swift # LT mode/URL/credentials block on the Proofread tab
-│   ├── PopupKit.swift          # shared popup chrome/cell/panel/placement for both floating popups
+│   ├── PopupKit.swift          # shared popup metrics/panel/placement/tile measuring (AppKit geometry, not views)
+│   ├── PopupPresenter.swift    # owns a popup's non-activating panel; generic present(view), no AnyView
+│   ├── PopupChrome.swift       # material panel + hairline border modifier (reads Reduce Transparency from the environment)
+│   ├── PopupCell.swift         # one item: selection pill, selected/button accessibility traits
+│   ├── PopupItemsLayout.swift  # the one column/line/tile layout both popups use
 │   ├── PopupTilePacker.swift   # pure: how many cells fit the tile's first row
-│   ├── ProofreadPopover.swift  # the fixes popup (PopupKit)
+│   ├── ProofreadPopover.swift  # the fixes popup: presenter + placement above the word
+│   ├── FixesPopupView.swift    # the fixes popup's content: header + PopupItemsLayout
+│   ├── FixesPopupHeader.swift  # kind marker, rule wording, "N of M" counter (one accessibility element)
+│   ├── PopupMessageView.swift  # one-line notice in the same chrome
+│   ├── FirstMouseHostingView.swift # NSHostingView that accepts the first click on a never-key panel
 │   ├── HistoryPanelView.swift  # History list shown as a popover from the menu bar (click = copy)
 │   └── PopupController.swift   # floating NSPanel for translation/results (Copy/Close)
 └── Store/
@@ -98,7 +108,7 @@ Info.plist                      # LSUIElement, version (source of truth for vers
 - **Shift+Cmd+E** → Quick Translate window
 - **Proofread** (LanguageTool), only when enabled on Settings → Proofread, has **no shortcut**: a
   pause in typing (~0.6 s) re-checks the focused field and underlines every issue in place
-  (squiggles; spelling is red, grammar yellow, punctuation green, style blue -- LanguageTool's own
+  (straight underlines; spelling is red, grammar yellow, punctuation green, style blue -- LanguageTool's own
   palette). Clicking an
   underlined word shows its fixes instantly -- the issues are already known, no round trip. In the
   popup: arrows or mouse hover choose a fix (the column layout uses up/down for fixes and
@@ -113,6 +123,20 @@ Info.plist                      # LSUIElement, version (source of truth for vers
   (many Electron/web fields) get no underlines; the popup still works if their text is readable.
   Chromium-based apps only build an accessibility tree when asked, so `ProofreadAX` sets
   `AXManualAccessibility` on the frontmost process once (`enableElectronAccessibilityIfNeeded`).
+  One LanguageTool rule is hidden on purpose (`LanguageToolEngine.ignoredProofreadRules`):
+  `UPPERCASE_SENTENCE_START`, "this sentence does not start with an uppercase letter". It is right by
+  the book and wrong for chat, where nearly every message starts in lowercase -- left on, it put a
+  permanent green underline (LanguageTool files it under `typographical`, which maps to punctuation)
+  on the first word of everything. It is filtered where matches become issues, not via the request's
+  `disabledRules`, because the "Correct" action shares the engine and there capitalising the start is
+  a legitimate fix. To hide another rule, add its id to that set.
+  **A selection never opens the popup** (`ProofreadClickPolicy`): editors put their own controls over
+  a selection -- Slack's formatting toolbar lands exactly where the fixes popup would -- so
+  double-clicking a word or dragging across a paragraph that holds an underlined one is left alone,
+  and only a plain click into a word asks for fixes. For the same reason the popup never selects the
+  word it is about (`showCurrent()`, in any app, not just Chromium/Electron -- a selection left
+  behind once the popup closes turned a single Backspace into deleting the whole word); the underline
+  already marks it, and `IssueApplier` makes the selection itself right before pasting a fix.
 - Each `ActionKey` may have its own recorded shortcut that runs its prompt on the selection directly.
 - **Esc** cancels an in-flight action.
 - **Word autocomplete** (off by default; enable and configure on the Autocomplete tab): as you type, a list of case-matched completions appears near the caret; arrow keys choose,
@@ -152,7 +176,17 @@ count for that key is reached (only counts with a larger sibling wait out the ti
 
 ## Engines
 - **Engine for text actions** (`Settings → Providers`): Apple on-device, DeepSeek, OpenRouter, OpenAI,
-  or Ollama. Cloud providers share one OpenAI-compatible client (`/chat/completions`).
+  or Ollama. Cloud providers share one OpenAI-compatible client (`/chat/completions`). This picker and
+  the **Provider** picker just below it configure different things -- the Provider section edits
+  credentials/model for whichever provider is selected there, not necessarily the one actions run on;
+  the Provider list tags the active one with "— active" for exactly this reason. `/models` is a public
+  listing on some providers (OpenRouter answers it with no key at all), so it cannot stand in for an
+  auth check: `testConnection()` always makes a real `/chat/completions` call, and `listModels()`
+  refuses to run with an empty key rather than silently returning an anonymous provider's catalog. A
+  401/403 names the provider in the error text, since it is otherwise indistinguishable from a
+  same-shaped key belonging to a different provider (`OpenAICompatibleEngine.providerName`). Keys are
+  trimmed of whitespace before being saved (`ProvidersSettingsView.saveKey`) -- a pasted key with a
+  trailing newline is invisible in the field and would otherwise fail with an unexplained 401.
 - **Translation is always on-device** via Apple's `Translation` framework, regardless of the chosen
   engine. It uses a two-language pair (primary/secondary) and translates into whichever the source is
   not; the source is auto-detected with `NaturalLanguage`.
@@ -188,14 +222,44 @@ For a signing-free local build (CI / no certificate): append `CODE_SIGNING_ALLOW
 Open `BindAll.xcodeproj` in Xcode and Run to launch the app (set the signing Team first).
 
 ## Permissions
-- **Accessibility** — required for the event tap and the synthetic Cmd+V. The coordinator polls and
-  starts the tap automatically once granted (no relaunch needed).
+- **Accessibility** — required for the event taps and the synthetic Cmd+V. `HotkeyCoordinator`'s
+  2s retry timer polls `AccessibilityPermission.isGranted` and (re)starts the hotkey tap and the
+  proofread monitors automatically once it is granted -- no relaunch needed. A macOS upgrade can
+  leave the Accessibility checkbox showing granted while `AXIsProcessTrusted()` is actually stale
+  (its designated requirement no longer matches what got re-signed); Settings → General → Status
+  shows Accessibility and **Global shortcuts** separately for exactly this case -- if shortcuts
+  read "Not active" with Accessibility "Granted", remove BindAll from the Accessibility list and
+  grant it again. `AccessibilityPermission.listenEventAccessGranted` (Input Monitoring) is
+  diagnostic-only, logged when a tap fails to install; it is never requested on its own.
 - **Apple Intelligence** — must be enabled for the on-device engine (`AppleFoundationEngine`).
 - **Translation language packs** — may download on first use.
+
+## Diagnostics
+Failures that used to be silent (a `tapCreate` returning nil, a monitor that never (re)installs) are
+now logged via `os.Logger`, subsystem `com.evgeny.bindall`, one category per area (`hotkeys`,
+`proofread`, `proofread-ax`, `login-item`, …): `log stream --predicate 'subsystem ==
+"com.evgeny.bindall"'`. `ProofreadAX.alignedRange`'s search window now scales with how far into the
+text the range sits (`max(16, min(256, location / 20))`) instead of a fixed ±16 UTF-16 units, and a
+miss is logged at `.debug` -- a fixed small window is what let long-document offset drift (an app's
+own AX bookkeeping disagreeing with ours) silently drop underlines and fixes. All AX calls made
+against another app's process now go through a 0.25s `AXUIElementSetMessagingTimeout`
+(`ProofreadAX.enableElectronAccessibilityIfNeeded`), so a hung target app cannot hang BindAll's main
+thread (and, with it, the active proofread popup tap the system would then disable).
 
 ## Key Guarantees
 - Menu-bar agent (`LSUIElement`); no Dock icon. The settings window temporarily switches the activation
   policy to `.regular` so it can come to the front, then back to `.accessory` on close.
+- The status icon is always the `sparkles` symbol; the three states differ only in the button's alpha
+  (`AppDelegate.updateStatusIcon`): full while idle, pulsing while an action runs, and dimmed to
+  `disabledAlpha` while the master switch (`settings.enabled`) is off. The master switch gates the
+  hotkey bursts, autocomplete and proofread alike, so "off" must stay visually distinguishable --
+  otherwise a disabled app looks exactly like a working one whose shortcuts do nothing.
+- The status menu draws every shortcut hint itself (six of them, one right-aligned column) and has
+  **no real key equivalents**. Give an item a real one and the system reserves its own column right of
+  the widest title -- our drawn line counts as a title -- so it lands to the right of ours and moving
+  ours only pushes it further; that is why Settings and Quit are drawn too. Their keys still work
+  while the menu is open through a local key monitor installed in `menuWillOpen` and removed in
+  `menuDidClose`.
 - API keys live in the **Keychain**, never in `UserDefaults`.
 - Hotkey bursts are debounced by a time window; a busy watchdog (25s) guarantees a stalled operation
   can never permanently block future hotkeys.

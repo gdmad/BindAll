@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var pulseTimer: Timer?
+    /// Alive only while the status menu is open -- see `menuWillOpen`.
+    private var menuKeyMonitor: Any?
     private lazy var historyPopover: NSPopover = {
         let popover = NSPopover()
         popover.behavior = .transient
@@ -33,6 +35,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] busy in self?.updateStatusIcon(busy: busy) }
+            .store(in: &cancellables)
+
+        // The icon also carries the master switch: dimmed while off. The main-thread hop matters --
+        // @Published fires in willSet, so the new value is only readable after it.
+        appState.$settings
+            .map(\.enabled)
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateStatusIcon(busy: self.appState.isProcessing)
+            }
             .store(in: &cancellables)
     }
 
@@ -63,14 +77,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         rebuildMenu()
     }
 
-    /// The icon is always "sparkles" -- idle and busy differ only in animation, not symbol. It is
+    /// Alpha of the idle icon while the master switch is off. Dimmed rather than a different symbol:
+    /// a switched-off app used to look exactly like a working one, which is how it can sit disabled
+    /// for days while its shortcuts silently do nothing.
+    private static let disabledAlpha: CGFloat = 0.4
+
+    /// The icon is always "sparkles" -- idle, off and busy differ only in alpha, not symbol. It is
     /// the button's own image, so the system click highlight and template inversion work correctly.
     /// While busy, it pulses via the button's alpha (symbol-effect animations would require an
     /// overlay view, which breaks the highlight).
     private func updateStatusIcon(busy: Bool) {
         guard let button = statusItem?.button else { return }
+        let enabled = appState.settings.enabled
+        let description = busy ? "BindAll — working" : (enabled ? "BindAll" : "BindAll — off")
         let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        var image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: busy ? "BindAll — working" : "BindAll")
+        var image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: description)
         image = image?.withSymbolConfiguration(config)
         image?.isTemplate = true
         button.image = image
@@ -90,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 }
             }
         } else {
-            button.alphaValue = 1.0
+            button.alphaValue = enabled ? 1.0 : Self.disabledAlpha
         }
     }
 
@@ -117,28 +138,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         menu.addItem(.separator())
 
-        // The same actions the global shortcuts trigger, drawn with their shortcut in one shared
-        // right-aligned column: a burst like Cmd+C+C cannot be expressed as a key equivalent, so it
-        // has to be drawn. Settings and Quit get real key equivalents instead of drawn ones -- a
-        // shortcut that is only painted on does nothing when pressed.
+        // Every shortcut hint is drawn by us, in one shared right-aligned column. A burst like Cmd+C+C
+        // cannot be expressed as a key equivalent, so those have to be drawn; Settings and Quit are
+        // drawn too, on purpose. A real key equivalent makes the system reserve its own column right
+        // of the widest title in the menu -- and our drawn line counts as a title -- so it would
+        // always sit to the right of ours, and moving ours only moves it further. With no real key
+        // equivalents in the menu there is no second column, and all six line up. The two keys still
+        // work while the menu is open: see `menuWillOpen`.
         let s = appState.settings
-        var actions: [(title: String, shortcut: String, action: Selector)] = [
+        let leading: [(title: String, shortcut: String, action: Selector)] = [
             ("Fix selection", HotkeyFormatter.string(s.defaultActionHotkey), #selector(menuFix)),
             ("Translate selection", HotkeyFormatter.string(s.translateHotkey), #selector(menuTranslate)),
             ("Translate from screen", HotkeyFormatter.string(s.screenTranslateHotkey), #selector(menuScreenTranslate)),
             ("Quick Translate", HotkeyFormatter.string(s.quickTranslateHotkey), #selector(menuQuickTranslate)),
         ]
+        let trailing: [(title: String, shortcut: String, action: Selector)] = [
+            ("Settings…", "⌘,", #selector(showSettings)),
+            ("Quit BindAll", "⌘Q", #selector(quit)),
+        ]
         // Column = widest "title + gap + shortcut" across every shortcut-bearing item.
         let font = NSFont.menuFont(ofSize: 0)
         let gap: CGFloat = 18
-        let widths = actions.map { ($0.title, $0.shortcut) }
+        let widths = (leading + trailing)
+            .map { (title: $0.title, shortcut: $0.shortcut) }
             .map { (title, shortcut) in
                 (title as NSString).size(withAttributes: [.font: font]).width + gap
                     + (shortcut as NSString).size(withAttributes: [.font: font]).width
             }
         let column = ceil(widths.max() ?? 220)
 
-        for a in actions {
+        for a in leading {
             menu.addItem(actionMenuItem(a.title, shortcut: a.shortcut, action: a.action, tab: column))
         }
 
@@ -152,15 +181,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             menu.addItem(history)
         }
 
-        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
-        settings.keyEquivalentModifierMask = [.command]
-        settings.target = self
-        menu.addItem(settings)
+        for a in trailing {
+            menu.addItem(actionMenuItem(a.title, shortcut: a.shortcut, action: a.action, tab: column))
+        }
+    }
 
-        let quitItem = NSMenuItem(title: "Quit BindAll", action: #selector(quit), keyEquivalent: "q")
-        quitItem.keyEquivalentModifierMask = [.command]
-        quitItem.target = self
-        menu.addItem(quitItem)
+    // MARK: - Keys while the menu is open
+
+    /// The Settings and Quit hints are drawn, not real key equivalents (see `rebuildMenu`), so the two
+    /// keys are handled here for as long as the menu is open. Only these two combinations, and only
+    /// while the menu is up: outside it they mean nothing to a menu-bar agent with no main menu.
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menuKeyMonitor == nil else { return }
+        menuKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  let action = Self.menuKeyAction(for: event.charactersIgnoringModifiers) else { return event }
+            self.statusItem?.menu?.cancelTracking()
+            DispatchQueue.main.async { action(self)() }
+            return nil
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if let menuKeyMonitor { NSEvent.removeMonitor(menuKeyMonitor) }
+        menuKeyMonitor = nil
+    }
+
+    private static func menuKeyAction(for characters: String?) -> ((AppDelegate) -> () -> Void)? {
+        switch characters {
+        case ",": return { $0.showSettings }
+        case "q": return { $0.quit }
+        default: return nil
+        }
     }
 
     /// Shows the History panel as a popover anchored to the status item.
@@ -255,8 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     /// Title with the shortcut in a secondary color, aligned to a `tab` column just past the widest
-    /// title. It is a non-functional hint: the real triggers are multi-press bursts that cannot be
-    /// represented as NSMenuItem key equivalents.
+    /// title. It is a hint, not a key equivalent: the real triggers are multi-press bursts that cannot
+    /// be represented as one, and the two that could (Settings, Quit) are drawn to keep one column.
     private static func menuTitle(_ title: String, shortcut: String, tab: CGFloat) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = [NSTextTab(textAlignment: .right, location: tab)]

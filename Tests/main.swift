@@ -239,6 +239,23 @@ let outOfRange = LanguageToolEngine.issues(
     text: emojiText)
 check(outOfRange.isEmpty, "issue past the end of text is dropped")
 
+// Chat messages start in lowercase, so the capital-at-sentence-start rule would underline the first
+// word of everything; it is filtered out while every other rule on the same text stays.
+let chatText = "привет как дела"
+let capitalRule = LTMatch(offset: 0, length: 6, message: "m", shortMessage: "", replacements: ["Привет"],
+                          ruleId: "UPPERCASE_SENTENCE_START", issueType: "typographical", categoryId: "CASING")
+let otherRule = LTMatch(offset: 7, length: 3, message: "m", shortMessage: "", replacements: ["как,"],
+                        ruleId: "COMMA_RULE", issueType: "typographical", categoryId: "PUNCTUATION")
+let filtered = LanguageToolEngine.issues(from: [capitalRule, otherRule], text: chatText)
+check(filtered.count == 1 && filtered[0].ruleId == "COMMA_RULE",
+      "the sentence-start capital rule is dropped and other rules are kept")
+check(LanguageToolEngine.issues(from: [capitalRule], text: chatText).isEmpty,
+      "a text whose only finding is the capital rule shows no underline")
+check(LanguageToolEngine.issues(
+        from: [LTMatch(offset: 0, length: 6, message: "m", shortMessage: "", replacements: [],
+                       ruleId: nil, issueType: nil, categoryId: nil)], text: chatText).count == 1,
+      "a match with no rule id is not mistaken for an ignored rule")
+
 print("TextIssue identity")
 let idA = issue(5, 3, original: "teh").id
 let idB = issue(5, 3, original: "teh").id
@@ -501,14 +518,6 @@ let below = UnderlineGeometry.appKitRect(fromQuartz: CGRect(x: 0, y: 1190, width
                                          primaryScreenHeight: 1000)
 check(below.origin.y == -210, "conversion is unclamped for secondary-display geometry")
 
-let squiggle = UnderlineGeometry.squigglePoints(width: 10, amplitude: 2, wavelength: 4)
-check(squiggle.first == CGPoint(x: 0, y: 0), "squiggle starts at x = 0, baseline")
-check(squiggle.last?.x == 10, "squiggle ends at x = width")
-check(zip(squiggle, squiggle.dropFirst()).allSatisfy { $0.x < $1.x }, "x is strictly increasing")
-check(squiggle.allSatisfy { $0.y == 0 || $0.y == 2 }, "y alternates between 0 and amplitude")
-check(UnderlineGeometry.squigglePoints(width: 0, amplitude: 2, wavelength: 4).count == 2,
-      "degenerate width yields just the endpoints")
-
 check(UnderlineGeometry.isSingleLine(rangeRect: CGRect(x: 0, y: 0, width: 100, height: 16),
                                      probeRect: CGRect(x: 0, y: 0, width: 8, height: 16)),
       "equal heights are single-line")
@@ -601,6 +610,49 @@ check(WordBoundary.wordRange(at: 4, in: "cat.dog") == NSRange(location: 0, lengt
       "dotted compound is treated as one word")
 check(WordBoundary.wordRange(at: 3, in: "cat. dog") == NSRange(location: 0, length: 3),
       "caret before a sentence dot picks the preceding word")
+
+print("ProofreadClickPolicy")
+// The Slack cases, as rules rather than something to retry by hand in a live channel.
+let sentence = "the quick brown fox jumps"
+check(ProofreadClickPolicy.action(selection: NSRange(location: 6, length: 0), caret: 6, in: sentence)
+        == .probe(NSRange(location: 4, length: 5)),
+      "a plain click inside a word asks about that word")
+check(ProofreadClickPolicy.action(selection: NSRange(location: 3, length: 0), caret: 3, in: sentence)
+        == .probe(NSRange(location: 0, length: 3)),
+      "a click at a word's right edge picks the word just ended")
+// A double-click selects the word and Slack drops its formatting toolbar right on top of it.
+check(ProofreadClickPolicy.action(selection: NSRange(location: 4, length: 5), caret: 4, in: sentence)
+        == .ignore,
+      "double-clicking a word leaves the popup alone (the app's own toolbar owns that spot)")
+// Dragging across a paragraph that contains an underlined word: same toolbar, same rule.
+check(ProofreadClickPolicy.action(selection: NSRange(location: 0, length: 25), caret: 0, in: sentence)
+        == .ignore,
+      "selecting a whole paragraph leaves the popup alone")
+check(ProofreadClickPolicy.action(selection: NSRange(location: 4, length: 1), caret: 4, in: sentence)
+        == .ignore,
+      "even a one-character selection counts as the user selecting, not asking")
+check(ProofreadClickPolicy.action(selection: NSRange(location: 4, length: 0), caret: 4, in: "the  fox")
+        == .dismiss,
+      "a click in whitespace closes the popup and keeps the underlines")
+check(ProofreadClickPolicy.action(selection: NSRange(location: 0, length: 0), caret: 0, in: "")
+        == .dismiss,
+      "a click in an empty field closes the popup")
+
+print("AutocompleteInsertion.plan")
+check(AutocompleteInsertion.plan(partial: "при", word: "привет") == .append("вет"),
+      "a suggestion continuing the partial only types the remainder")
+check(AutocompleteInsertion.plan(partial: "", word: "hello") == .append("hello"),
+      "an empty partial (next-word suggestion) types the whole word, deleting nothing")
+check(AutocompleteInsertion.plan(partial: "hel", word: "hel") == .append(""),
+      "the suggestion equal to the partial types nothing")
+check(AutocompleteInsertion.plan(partial: "прив", word: "Привет") == .replace(deleteCount: 4, "Привет"),
+      "a recased suggestion (no common prefix by case) deletes and retypes in full")
+check(AutocompleteInsertion.plan(partial: "xyz", word: "hello") == .replace(deleteCount: 3, "hello"),
+      "an unrelated suggestion deletes the partial and retypes in full")
+check(AutocompleteInsertion.plan(partial: "hello", word: "hel") == .replace(deleteCount: 5, "hel"),
+      "a suggestion shorter than the partial (not a continuation) replaces rather than appending")
+check(AutocompleteInsertion.plan(partial: "a😉b", word: "a😉bad") == .append("ad"),
+      "UTF-16 delete count and the appended suffix both stay correct past an emoji")
 
 print("IssueMerger.capReplacements")
 let capIssue = TextIssue(range: NSRange(location: 0, length: 4), kind: .spelling,
