@@ -57,22 +57,70 @@ struct HiddenBreaks: Equatable {
         }
     }
 
-    /// Where two consecutive pieces of a field's text meet with nothing between them, and the second
-    /// starts on a new line. `pieces` are the text leaves in reading order; `startsNewLine(i)` says
-    /// whether piece `i` begins on a lower line than piece `i - 1` ends. Pieces that must not be
-    /// glued (whitespace on either side of the seam) need no break: the text already separates them.
-    static func find(pieces: [String], startsNewLine: (Int) -> Bool) -> HiddenBreaks {
+    /// Where each piece of a field's text sits in that text, or nil for a piece that is not in it.
+    /// Chromium reports a bulleted list's markers ("•", "1.") as text elements of their own while
+    /// leaving them out of the field's value, and a link can add text of its own; requiring the
+    /// pieces to add up to the value exactly is what made the whole search give up on such fields.
+    /// Each piece is looked for at the cursor or a little past it; one that is not found is skipped.
+    static func align(pieces: [String], in text: String, lookahead: Int = 64) -> [Int?] {
+        let ns = text as NSString
+        var cursor = 0
+        return pieces.map { piece in
+            let length = (piece as NSString).length
+            guard length > 0, cursor < ns.length else { return nil }
+            let window = NSRange(location: cursor, length: min(ns.length - cursor, lookahead + length))
+            let found = ns.range(of: piece, options: [.literal], range: window)
+            guard found.location != NSNotFound else { return nil }
+            cursor = NSMaxRange(found)
+            return found.location
+        }
+    }
+
+    /// Where two pieces that sit back to back in `text` meet with nothing between them, and the
+    /// second starts on a new line. `startsNewLine(previous, next)` gets the two pieces' indices.
+    /// Pieces with whitespace at the seam need no break: the text already separates them.
+    static func find(pieces: [String], in text: String,
+                     startsNewLine: (_ previous: Int, _ next: Int) -> Bool) -> HiddenBreaks {
+        let starts = align(pieces: pieces, in: text)
         var offsets: [Int] = []
-        var position = 0
-        for (index, piece) in pieces.enumerated() {
-            defer { position += (piece as NSString).length }
-            guard index > 0, let first = piece.unicodeScalars.first,
-                  let last = pieces[index - 1].unicodeScalars.last,
+        var previous: (index: Int, end: Int)?
+        for (index, start) in starts.enumerated() {
+            guard let start else { continue }
+            defer { previous = (index, start + (pieces[index] as NSString).length) }
+            guard let prev = previous, prev.end == start,
+                  let first = pieces[index].unicodeScalars.first,
+                  let last = pieces[prev.index].unicodeScalars.last,
                   !CharacterSet.whitespacesAndNewlines.contains(first),
                   !CharacterSet.whitespacesAndNewlines.contains(last),
-                  startsNewLine(index) else { continue }
-            offsets.append(position)
+                  startsNewLine(prev.index, index) else { continue }
+            offsets.append(start)
         }
         return HiddenBreaks(offsets: offsets)
     }
+
+    /// Places in `issue` that could be a line break the field hides: where the issue begins, when its
+    /// fix inserts a space ("add a space between sentences"), and inside it wherever a lowercase
+    /// letter or closing punctuation runs straight into a capital or a digit ("breadCall"). Each is
+    /// the offset of the character after the possible break; the caller checks them on screen.
+    static func seamCandidates(of issue: TextIssue, in text: String) -> [Int] {
+        let ns = text as NSString
+        let start = issue.range.location
+        let end = min(NSMaxRange(issue.range), ns.length)
+        var out: [Int] = []
+        if start > 0, let fix = issue.replacements.first, fix.first?.isWhitespace == true,
+           issue.original.first?.isWhitespace == false {
+            out.append(start)
+        }
+        guard end - start > 1 else { return out }
+        for offset in (start + 1)..<end {
+            guard let before = UnicodeScalar(ns.character(at: offset - 1)),
+                  let after = UnicodeScalar(ns.character(at: offset)) else { continue }
+            let closesRun = CharacterSet.lowercaseLetters.contains(before) || closingPunctuation.contains(before)
+            let opensRun = CharacterSet.uppercaseLetters.contains(after) || CharacterSet.decimalDigits.contains(after)
+            if closesRun && opensRun { out.append(offset) }
+        }
+        return out
+    }
+
+    private static let closingPunctuation = CharacterSet(charactersIn: ".,:;!?)]»\"'")
 }

@@ -879,10 +879,59 @@ let threeBreaks = HiddenBreaks(offsets: [8, 4])
 eq(threeBreaks.checkText(three), "оди.\nдва.\nтри", "several breaks, given out of order")
 check(threeBreaks.mapBack([ltIssue(threeBreaks.checkText(three), 10, 3)], to: three).first?.range
       == NSRange(location: 8, length: 3), "the second break shifts by two")
-let found = HiddenBreaks.find(pieces: ["Список:", "купить", " хлеб", "Позвонить"]) { $0 != 2 }
+let found = HiddenBreaks.find(pieces: ["Список:", "купить", " хлеб", "Позвонить"],
+                              in: "Список:купить хлебПозвонить") { _, next in next != 2 }
 check(found.offsets == [7, 18], "a break needs a new line and no whitespace at the seam")
-check(HiddenBreaks.find(pieces: ["жирный", "обычный"]) { _ in false }.isEmpty,
+check(HiddenBreaks.find(pieces: ["жирный", "обычный"], in: "жирныйобычный") { _, _ in false }.isEmpty,
       "inline formatting on one line is not a break")
+// Slack's bulleted list: the markers are text elements of their own but are not in the value.
+let bulletPieces = ["По итогу встречи:", "•", "2 документа - согласовали", "•", "Презентация - согласовали.",
+                    "•", "Общую папку (", "https://drive.google.com/x", ") - заполняем", "1.", "Собрать группу"]
+let bulletText = "По итогу встречи:2 документа - согласовалиПрезентация - согласовали.Общую папку (https://drive.google.com/x) - заполняемСобрать группу"
+let itemStarts: Set<Int> = [2, 4, 6, 10]
+let bulletBreaks = HiddenBreaks.find(pieces: bulletPieces, in: bulletText) { _, next in itemStarts.contains(next) }
+let bulletNS = bulletText as NSString
+let expectedItemStarts = ["2 документа", "Презентация", "Общую папку", "Собрать группу"].map { bulletNS.range(of: $0).location }
+check(bulletBreaks.offsets == expectedItemStarts,
+      "list markers missing from the value do not stop the item breaks being found (\(bulletBreaks.offsets))")
+eq(bulletBreaks.checkText(bulletText),
+   "По итогу встречи:\n2 документа - согласовали\nПрезентация - согласовали.\nОбщую папку (https://drive.google.com/x) - заполняем\nСобрать группу",
+   "the meeting notes come out one item per line, link kept inline")
+let aligned = HiddenBreaks.align(pieces: ["один", "ЛИШНЕЕ", "два"], in: "одиндва")
+check(aligned[0] == 0 && aligned[1] == nil && aligned[2] == 4, "a piece that is not in the text is skipped, the rest still align")
+check(HiddenBreaks.find(pieces: ["один", "ЛИШНЕЕ", "два"], in: "одиндва") { _, _ in true }.offsets == [4],
+      "pieces either side of a skipped one still meet")
+
+print("Seam candidates")
+func seamIssue(_ text: String, _ word: String, fix: String) -> TextIssue {
+    let range = (text as NSString).range(of: word)
+    return TextIssue(range: range, kind: .punctuation, shortMessage: "", message: "", replacements: [fix],
+                     ruleId: "R", source: .languageTool, original: word)
+}
+let seamSentence = "согласовали.Презентация"
+check(HiddenBreaks.seamCandidates(of: seamIssue(seamSentence, "Презентация", fix: " Презентация"), in: seamSentence)
+      == [(seamSentence as NSString).range(of: "Презентация").location], "a fix that inserts a space marks the issue start")
+let gluedWord = "купить хлебПозвонить маме"
+check(HiddenBreaks.seamCandidates(of: seamIssue(gluedWord, "хлебПозвонить", fix: "хлеб Позвонить"), in: gluedWord)
+      == [(gluedWord as NSString).range(of: "Позвонить").location], "lowercase running into a capital is a candidate")
+let acronym = "Пилот на VRS и ИИ"
+check(HiddenBreaks.seamCandidates(of: seamIssue(acronym, "VRS", fix: "VR"), in: acronym).isEmpty
+      && HiddenBreaks.seamCandidates(of: seamIssue(acronym, "ИИ", fix: "ИИ."), in: acronym).isEmpty,
+      "capitals inside an acronym are not candidates")
+
+print("ProofreadSkips")
+func skipIssue(_ location: Int, before: String, after: String) -> TextIssue {
+    TextIssue(range: NSRange(location: location, length: 5), kind: .spelling, shortMessage: "", message: "",
+              replacements: ["слово"], ruleId: "MORFOLOGIK", source: .languageTool, original: "слвоо",
+              contextBefore: before, contextAfter: after)
+}
+var skips = ProofreadSkips()
+skips.insert(skipIssue(10, before: "это моё ", after: " тут"))
+check(skips.filter([skipIssue(25, before: "это моё ", after: " тут")]).isEmpty,
+      "a skipped place stays skipped after the text before it moved")
+check(skips.filter([skipIssue(40, before: "другое ", after: " там")]).count == 1,
+      "the same word elsewhere is still reported")
+
 
 print("TranslationLayout")
 eq(TranslationLayout.restore(source: "Привет!\nКак\nдела?", translation: "Hello!\n\nHow\n\nthings?"),

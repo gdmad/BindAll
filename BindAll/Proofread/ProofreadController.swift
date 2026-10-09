@@ -32,6 +32,8 @@ final class ProofreadController {
 
     private var config = Config()
     private var provider: LanguageToolProofreadProvider?
+    /// Places the user skipped; see `ProofreadSkips`.
+    private var skips = ProofreadSkips()
     private let popover = ProofreadPopover()
     private let underlines = UnderlineOverlay()
     private static let log = Logger(subsystem: "com.evgeny.bindall", category: "proofread")
@@ -230,13 +232,17 @@ final class ProofreadController {
         checkTask?.cancel()
         pendingSelectionCheck = selection != nil
         let breaks = target?.breaks ?? .none
+        let chromiumElement = target.flatMap { ProofreadAX.isChromium(pid: $0.pid) ? $0.element : nil }
 
         checkTask = Task { [weak self] in
             guard let self else { return }
             defer { if gen == self.generation { self.pendingSelectionCheck = false } }
             do {
-                let found = breaks.mapBack(try await provider.check(breaks.checkText(text)), to: text)
+                var found = breaks.mapBack(try await provider.check(breaks.checkText(text)), to: text)
                 guard !Task.isCancelled, gen == self.generation else { return }
+                if let element = chromiumElement {
+                    found.removeAll { ProofreadAX.crossesVisualBreak($0, text: text, in: element) }
+                }
                 let rebased = offset == 0 ? found : ProofreadCache.rebase(found, to: offset)
                 self.lastError = nil
                 self.applyResults(rebased, selection: selection, announceMiss: announceMiss, resumeIndex: resumeIndex)
@@ -255,7 +261,7 @@ final class ProofreadController {
     private func applyResults(_ found: [TextIssue], selection: NSRange?, announceMiss: Bool = false,
                               resumeIndex: Int? = nil) {
         // Cap once at the door so the popup, arrow navigation and accept all see the same list.
-        issues = IssueMerger.capReplacements(found, limit: config.maxReplacements)
+        issues = IssueMerger.capReplacements(skips.filter(found), limit: config.maxReplacements)
         lastCheckedText = target?.text ?? ""
         redrawUnderlines()
 
@@ -331,9 +337,12 @@ final class ProofreadController {
                      onAccept: { [weak self] index in self?.acceptReplacement(index) })
     }
 
+    /// The "Skip" row comes after the fixes, so its index is the number of fixes.
+    private func skipIndex(of issue: TextIssue) -> Int { issue.replacements.count }
+
     /// Mouse hover over a row: mirror it into the keyboard selection.
     private func hoverReplacement(_ index: Int) {
-        guard let issue = issues[safe: currentIndex], index >= 0, index < issue.replacements.count,
+        guard let issue = issues[safe: currentIndex], index >= 0, index <= skipIndex(of: issue),
               index != selectedReplacement else { return }
         selectedReplacement = index
         showCurrent()
@@ -341,24 +350,31 @@ final class ProofreadController {
 
     /// Mouse click on a row: same path as selecting it with arrows and pressing Return.
     private func acceptReplacement(_ index: Int) {
-        guard let issue = issues[safe: currentIndex], index >= 0, index < issue.replacements.count else { return }
+        guard let issue = issues[safe: currentIndex], index >= 0, index <= skipIndex(of: issue) else { return }
         selectedReplacement = index
         accept()
     }
 
     private func move(_ delta: Int) {
-        let issue = issues[safe: currentIndex]
-        guard let count = issue?.replacements.count, count > 0 else { return }
-        selectedReplacement = max(0, min(count - 1, selectedReplacement + delta))
+        guard let issue = issues[safe: currentIndex] else { return }
+        selectedReplacement = max(0, min(skipIndex(of: issue), selectedReplacement + delta))
         showCurrent()
     }
 
     /// Moves the fix selection inside the two-row tile grid.
+    /// The Skip row sits below the grid: down from the bottom row reaches it, up leaves it.
     private func moveGrid(dx: Int, dy: Int) {
-        guard let issue = issues[safe: currentIndex], issue.replacements.count > 0 else { return }
-        selectedReplacement = PopupLayout.tileIndex(from: selectedReplacement, deltaX: dx, deltaY: dy,
-                                                    count: issue.replacements.count,
-                                                    topRowCount: popover.lastTileTopCount)
+        guard let issue = issues[safe: currentIndex] else { return }
+        let skip = skipIndex(of: issue)
+        if selectedReplacement == skip {
+            guard dy < 0, skip > 0 else { return }
+            selectedReplacement = skip - 1
+        } else {
+            let next = PopupLayout.tileIndex(from: selectedReplacement, deltaX: dx, deltaY: dy,
+                                             count: issue.replacements.count,
+                                             topRowCount: popover.lastTileTopCount)
+            selectedReplacement = (next == selectedReplacement && dy > 0) ? skip : next
+        }
         showCurrent()
     }
 
@@ -389,6 +405,10 @@ final class ProofreadController {
             Self.log.debug("accept ignored: a fix is already being applied")
             return
         }
+        if let issue = issues[safe: currentIndex], selectedReplacement == skipIndex(of: issue) {
+            skipCurrent()
+            return
+        }
         guard let issue = issues[safe: currentIndex],
               let replacement = issue.replacements[safe: selectedReplacement] else {
             Self.log.debug("accept: no issue/replacement at \(self.currentIndex)/\(self.selectedReplacement)")
@@ -411,6 +431,21 @@ final class ProofreadController {
             guard let self else { return }
             self.isApplying = false
             self.handleApplyResult(result, issue: issue, replacement: replacement)
+        }
+    }
+
+    /// "Not here": forgets this one place for the rest of the session and moves on to whatever
+    /// problem now sits at the same position, or closes the popup when none is left.
+    private func skipCurrent() {
+        guard let issue = issues[safe: currentIndex] else { endNavigation(); return }
+        skips.insert(issue)
+        let index = currentIndex
+        issues.remove(at: index)
+        redrawUnderlines()
+        if issues.isEmpty {
+            endNavigation()
+        } else {
+            focusIssue(min(index, issues.count - 1))
         }
     }
 

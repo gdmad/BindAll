@@ -20,6 +20,7 @@ swiftc -O \
     BindAll/Proofread/RecheckPolicy.swift \
     BindAll/Proofread/ProofreadClickPolicy.swift \
     BindAll/Proofread/HiddenBreaks.swift \
+    BindAll/Proofread/ProofreadSkips.swift \
     BindAll/Engines/TranslationLayout.swift \
     BindAll/Engines/OCRParagraphs.swift \
     BindAll/UI/PopupTilePacker.swift \

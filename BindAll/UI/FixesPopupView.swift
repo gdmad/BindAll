@@ -31,8 +31,22 @@ struct FixesPopupView: View {
                                  fontSize: fontSize, tileTopCount: tileTopCount,
                                  onHover: onHover, onActivate: onAccept)
             }
+            Divider()
+            FixesPopupSkipRow(isSelected: selected == skipIndex, fontSize: fontSize,
+                              onHover: hoverSkip, onActivate: skip)
         }
         .frame(minWidth: PopupMetrics.minWidth, maxWidth: PopupMetrics.maxWidth, alignment: .leading)
         .popupChrome()
+    }
+
+    /// The Skip row follows the fixes, so its index is the number of fixes.
+    private var skipIndex: Int { replacements.count }
+
+    private func hoverSkip() {
+        onHover(skipIndex)
+    }
+
+    private func skip() {
+        onAccept(skipIndex)
     }
 }

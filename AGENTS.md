@@ -53,7 +53,8 @@ BindAll/
 │   ├── TextIssue.swift                # shared issue model (UTF-16 ranges, stable ids)
 │   ├── IssueMerger.swift              # merge/shift/context-checked relocate/firstIssue -- pure range algebra
 │   ├── ProofreadCache.swift           # paragraph segmentation + per-paragraph issue cache
-│   ├── HiddenBreaks.swift             # pure: block breaks Chromium leaves out of AXValue (check text + map back)
+│   ├── HiddenBreaks.swift             # pure: block breaks Chromium leaves out of AXValue (align leaves, check text, map back, seam candidates)
+│   ├── ProofreadSkips.swift           # pure: places the user skipped (rule + text + context keys)
 │   ├── ProofreadLanguage.swift        # language resolution; ru/uk disambiguation for "auto"
 │   ├── LanguageToolProofreadProvider.swift # actor: paragraph-scoped checks + cache
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
@@ -97,7 +98,7 @@ BindAll/
 │   ├── PopupItemsLayout.swift  # the one column/line/tile layout both popups use
 │   ├── PopupTilePacker.swift   # pure: how many cells fit the tile's first row
 │   ├── ProofreadPopover.swift  # the fixes popup: presenter + placement above the word
-│   ├── FixesPopupView.swift    # the fixes popup's content: header + PopupItemsLayout
+│   ├── FixesPopupView.swift    # the fixes popup's content: header + PopupItemsLayout + FixesPopupSkipRow
 │   ├── FixesPopupHeader.swift  # kind marker, rule wording, "N of M" counter (one accessibility element)
 │   ├── PopupMessageView.swift  # one-line notice in the same chrome
 │   ├── FirstMouseHostingView.swift # NSHostingView that accepts the first click on a never-key panel
@@ -239,10 +240,19 @@ count for that key is reached (only counts with a larger sibling wait out the ti
 - **Slack block boundaries:** Slack (Chromium) reports list items, quotes and code blocks glued
   together in `AXValue` ("Buy bread.Call mom"), which made LanguageTool flag every list item's first
   word with `SENTENCE_WHITESPACE`. `ProofreadAX.hiddenBreaks` (Chromium only) walks the field's text
-  leaves; when they add up to exactly `AXValue`, each seam with no whitespace whose next leaf starts
-  on a lower line (per `AXBoundsForRange`) is a hidden break. The check runs on
+  leaves and matches them against `AXValue` with a cursor (`HiddenBreaks.align`): a leaf that is not
+  in the value -- a bulleted list's "•" / "1." markers, extra link text -- is skipped instead of
+  spoiling the rest. Two matched leaves that sit back to back with no whitespace, the second starting
+  on a lower line (per `AXBoundsForRange`), are a hidden break. The check runs on
   `HiddenBreaks.checkText` (newlines put back), and `mapBack` returns issues in `AXValue`
   coordinates, dropping any that span a break and retaking original/context from the field's text.
+  Safety net for a break the leaves miss: `ProofreadAX.crossesVisualBreak` drops an issue whose
+  `HiddenBreaks.seamCandidates` (its start when the fix inserts a space; lowercase/closing
+  punctuation running into a capital or digit inside it) straddle two screen lines.
+- **Skip:** the fixes popup ends with a "Skip" row (below a divider, secondary, `eye.slash`), reached
+  with the arrows like a fix (index = `replacements.count`) or clicked. It hides that one place for
+  the rest of the session via `ProofreadSkips`, keyed by rule + text + 6 characters of context each
+  side, so it survives re-checks and edits elsewhere while the same word in another place still shows.
 - **Translation layout:** Apple's model (macOS 27) translates each line as its own segment and
   joins the output with blank lines. The whole text still goes in one request (context matters);
   `TranslationLayout.restore` then swaps the output's newline runs for the source's. OCR lines are

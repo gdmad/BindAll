@@ -335,25 +335,44 @@ enum ProofreadAX {
     }
 
     /// Finds the list items, quotes and code blocks that a Chromium field shows on separate lines but
-    /// reports glued together in its value. Trusted only when the leaves add up to exactly that value:
-    /// otherwise their offsets mean nothing here, and the text is checked as it is.
+    /// reports glued together in its value. The leaves are matched against the value one by one, so
+    /// list markers and other text that is not in the value are skipped instead of spoiling the rest.
     static func hiddenBreaks(in element: AXUIElement, text: String) -> HiddenBreaks {
         let leaves = textLeaves(of: element, depth: 6, budget: 200)
-        guard leaves.count > 1, leaves.map(\.text).joined() == text else { return .none }
-        let breaks = HiddenBreaks.find(pieces: leaves.map(\.text)) { index in
-            let previous = leaves[index - 1]
-            let lastIndex = (previous.text as NSString).length - 1
-            guard let end = rawBounds(NSRange(location: lastIndex, length: 1), in: previous.element),
-                  let start = rawBounds(NSRange(location: 0, length: 1), in: leaves[index].element) else {
+        guard leaves.count > 1 else { return .none }
+        let pieces = leaves.map(\.text)
+        let breaks = HiddenBreaks.find(pieces: pieces, in: text) { previous, next in
+            let lastIndex = (pieces[previous] as NSString).length - 1
+            guard let end = rawBounds(NSRange(location: lastIndex, length: 1), in: leaves[previous].element),
+                  let start = rawBounds(NSRange(location: 0, length: 1), in: leaves[next].element) else {
                 return false
             }
-            // Quartz coordinates: a lower line has a larger y. The slack absorbs mixed font sizes.
-            return start.minY >= end.maxY - 2
+            return isLower(start, than: end)
         }
-        if !breaks.isEmpty {
-            log.debug("hidden breaks at \(breaks.offsets, privacy: .public) across \(leaves.count, privacy: .public) leaves")
-        }
+        let matched = HiddenBreaks.align(pieces: pieces, in: text).compactMap { $0 }.count
+        log.debug("hidden breaks: \(breaks.offsets.count, privacy: .public) from \(matched, privacy: .public) of \(leaves.count, privacy: .public) leaves matched")
         return breaks
+    }
+
+    /// The safety net for a break `hiddenBreaks` could not see: whether `issue` sits across a line
+    /// break the field leaves out of its text, judged by where the characters are on screen.
+    static func crossesVisualBreak(_ issue: TextIssue, text: String, in element: AXUIElement) -> Bool {
+        let seams = HiddenBreaks.seamCandidates(of: issue, in: text)
+        guard !seams.isEmpty else { return false }
+        // The app's offsets can drift from the value's (see `alignedRange`); measure in its own.
+        let shift = alignedRange(issue.range, expecting: issue.original, in: element,
+                                 contextBefore: issue.contextBefore,
+                                 contextAfter: issue.contextAfter).map { $0.location - issue.range.location } ?? 0
+        return seams.contains { seam in
+            guard let left = rawBounds(NSRange(location: seam - 1 + shift, length: 1), in: element),
+                  let right = rawBounds(NSRange(location: seam + shift, length: 1), in: element) else { return false }
+            return isLower(right, than: left)
+        }
+    }
+
+    /// Quartz coordinates: a lower line has a larger y. The slack absorbs mixed font sizes.
+    private static func isLower(_ rect: CGRect, than other: CGRect) -> Bool {
+        rect.minY >= other.maxY - 2
     }
 
     /// Leaf elements carrying text, in reading order (depth-limited: these trees can be large).
