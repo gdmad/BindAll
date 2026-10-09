@@ -106,7 +106,7 @@ BindAll/
 │   ├── QuickTranslate*.swift   # Quick Translate window: controller, @Observable model, view, language
 │   │                           # bar, input (vertical TextField: system placeholder level with the
 │   │                           # caret; Return translates, Shift+Return inserts a newline), output,
-│   │                           # action bar (Clear / Close / Copy), footer
+│   │                           # action bar ([Clear] ... [Close][Copy]), footer
 │   ├── CopyButton.swift / CloseButton.swift # the shared translation-window buttons (Copy is the
 │   │                           # prominent one, "Copied" for 1.5 s)
 │   └── CopyShortcutMonitor.swift # Cmd+C in a translation window: the selection if there is one,

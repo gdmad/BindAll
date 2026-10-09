@@ -21,7 +21,7 @@ struct TypoFilterRow: View {
             if onlyTypos, listedCount > 0 {
                 Button("Remove all listed", role: .destructive, action: confirmRemoval)
                     .controlSize(.small)
-                    .confirmationDialog("Remove ^[\(listedCount) word](inflect: true)?", isPresented: $confirmingRemoval) {
+                    .confirmationDialog(confirmationTitle, isPresented: $confirmingRemoval) {
                         Button("Remove", role: .destructive, action: removeListed)
                         Button("Cancel", role: .cancel) {}
                     } message: {
@@ -29,6 +29,12 @@ struct TypoFilterRow: View {
                     }
             }
         }
+    }
+
+    /// Built as a plain string: a dialog title is not rendered by `Text`, so the inflection markup
+    /// would show up literally. `AttributedString(localized:)` resolves it ("1 word", "2 words").
+    private var confirmationTitle: String {
+        String(AttributedString(localized: "Remove ^[\(listedCount) word](inflect: true)?").characters)
     }
 
     private func confirmRemoval() {
