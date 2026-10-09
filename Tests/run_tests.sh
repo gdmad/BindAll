@@ -19,6 +19,9 @@ swiftc -O \
     BindAll/Proofread/ProofreadLanguage.swift \
     BindAll/Proofread/RecheckPolicy.swift \
     BindAll/Proofread/ProofreadClickPolicy.swift \
+    BindAll/Proofread/HiddenBreaks.swift \
+    BindAll/Engines/TranslationLayout.swift \
+    BindAll/Engines/OCRParagraphs.swift \
     BindAll/UI/PopupTilePacker.swift \
     BindAll/Engines/LanguageToolEngine.swift \
     BindAll/Autocomplete/AutocompleteEngine.swift \

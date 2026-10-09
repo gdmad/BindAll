@@ -35,6 +35,8 @@ BindAll/
 │   ├── LanguageToolEngine.swift      # LanguageTool client: correct() applies all fixes;
 │   │                                 # check()/parseMatches()/issues() feed Proofread
 │   ├── TranslationService.swift      # Apple Translation framework + NL language detection
+│   ├── TranslationLayout.swift # pure: puts the source's line breaks back into a translation
+│   ├── OCRParagraphs.swift     # pure: joins wrapped OCR lines back into paragraphs
 │   └── OCRService.swift        # screencapture region + Vision text recognition
 ├── Autocomplete/               # word completion while typing (off by default)
 │   ├── AutocompleteEngine.swift       # NSSpellChecker completions/guesses + recasing + partial-word; Mode (baseline/context/semantic) + scorer re-ranking
@@ -50,6 +52,7 @@ BindAll/
 │   ├── TextIssue.swift                # shared issue model (UTF-16 ranges, stable ids)
 │   ├── IssueMerger.swift              # merge/shift/context-checked relocate/firstIssue -- pure range algebra
 │   ├── ProofreadCache.swift           # paragraph segmentation + per-paragraph issue cache
+│   ├── HiddenBreaks.swift             # pure: block breaks Chromium leaves out of AXValue (check text + map back)
 │   ├── ProofreadLanguage.swift        # language resolution; ru/uk disambiguation for "auto"
 │   ├── LanguageToolProofreadProvider.swift # actor: paragraph-scoped checks + cache
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
@@ -85,7 +88,13 @@ BindAll/
 │   ├── PopupMessageView.swift  # one-line notice in the same chrome
 │   ├── FirstMouseHostingView.swift # NSHostingView that accepts the first click on a never-key panel
 │   ├── HistoryPanelView.swift  # History list shown as a popover from the menu bar (click = copy)
-│   └── PopupController.swift   # floating NSPanel for translation/results (Copy/Close)
+│   ├── PopupController.swift   # floating NSPanel for translation/results; closes on Esc/Close only
+│   ├── PopupModel.swift / PopupView.swift / PopupHeader.swift / PopupOriginalSection.swift
+│   │                           # result popup: header is the only drag area, copy-original icon
+│   ├── WindowDragHandle.swift  # NSView that drags its window (body stays text-selectable)
+│   ├── KeyablePanel.swift      # NSPanel that can become key from an accessory app
+│   └── QuickTranslate*.swift   # Quick Translate window: controller, view, language bar, input,
+│                               # output (Copy / Ctrl+C copies the whole translation), footer
 └── Store/
     ├── Settings.swift          # Codable settings, ProviderKind, HotkeyConfig
     ├── ActionKey.swift         # {key, label, prompt, hotkey?}; built-in w / u / l / о / гг
@@ -207,6 +216,18 @@ count for that key is reached (only counts with a larger sibling wait out the ti
   wire for Premium only; `LanguageToolEngine.authParams` is a final guard that never sends a
   lone username or apiKey. The Premium token lives in the Keychain. The URL is pre-filled per mode
   but stays editable; there is no settings migration (mode defaults to Free).
+- **Slack block boundaries:** Slack (Chromium) reports list items, quotes and code blocks glued
+  together in `AXValue` ("Buy bread.Call mom"), which made LanguageTool flag every list item's first
+  word with `SENTENCE_WHITESPACE`. `ProofreadAX.hiddenBreaks` (Chromium only) walks the field's text
+  leaves; when they add up to exactly `AXValue`, each seam with no whitespace whose next leaf starts
+  on a lower line (per `AXBoundsForRange`) is a hidden break. The check runs on
+  `HiddenBreaks.checkText` (newlines put back), and `mapBack` returns issues in `AXValue`
+  coordinates, dropping any that span a break and retaking original/context from the field's text.
+- **Translation layout:** Apple's model (macOS 27) translates each line as its own segment and
+  joins the output with blank lines. The whole text still goes in one request (context matters);
+  `TranslationLayout.restore` then swaps the output's newline runs for the source's. OCR lines are
+  first joined into paragraphs (`OCRParagraphs`: small vertical gap and aligned left edge = same
+  paragraph; a hyphenated wrap is rejoined), since screen line breaks cut sentences in half.
 - **Writing results back:** the frontmost app is captured when an action starts; the result is pasted
   with Cmd+V (reliable across native and Electron/Chromium apps). If focus moved to another app while
   the engine worked, the original app is re-activated first so the result lands where it started.

@@ -58,8 +58,10 @@ enum OCRService {
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         try handler.perform([request])
 
-        let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-        let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = (request.results ?? []).compactMap { observation in
+            observation.topCandidates(1).first.map { OCRParagraphs.Line(text: $0.string, box: observation.boundingBox) }
+        }
+        let text = OCRParagraphs.join(lines).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw OCRError.noText }
         return text
     }

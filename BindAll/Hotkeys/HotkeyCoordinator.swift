@@ -434,7 +434,8 @@ final class HotkeyCoordinator: ObservableObject {
         do {
             let translation = try await translationCoordinator.translate(text, from: from, to: target)
             recordHistory(kind: historyKind, input: text, output: translation, engine: "Apple Translation")
-            popup.show(title: "", text: translation, original: text, sourceLanguage: sourceDisplay)
+            popup.show(title: "Translation", text: translation, original: text, sourceLanguage: sourceDisplay,
+                       targetLanguage: AppLanguages.name(for: targetCode))
         } catch {
             popup.show(title: "Translation failed", text: error.localizedDescription)
         }

@@ -229,12 +229,13 @@ final class ProofreadController {
         let gen = generation
         checkTask?.cancel()
         pendingSelectionCheck = selection != nil
+        let breaks = target?.breaks ?? .none
 
         checkTask = Task { [weak self] in
             guard let self else { return }
             defer { if gen == self.generation { self.pendingSelectionCheck = false } }
             do {
-                let found = try await provider.check(text)
+                let found = breaks.mapBack(try await provider.check(breaks.checkText(text)), to: text)
                 guard !Task.isCancelled, gen == self.generation else { return }
                 let rebased = offset == 0 ? found : ProofreadCache.rebase(found, to: offset)
                 self.lastError = nil

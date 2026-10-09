@@ -12,6 +12,8 @@ struct ProofTarget {
     /// UTF-16 offset of the caret (selection start).
     let caret: Int
     let selection: NSRange
+    /// Block boundaries the app shows but leaves out of `text` (see `HiddenBreaks`).
+    var breaks: HiddenBreaks = .none
 }
 
 enum ProofSource {
@@ -54,8 +56,9 @@ enum ProofreadAX {
                pid != frontPid, chromiumPids.contains(frontPid) {
                 chromiumPids.insert(pid)
             }
+            let breaks = isChromium(pid: pid) ? hiddenBreaks(in: candidate, text: text) : .none
             return .axField(ProofTarget(element: candidate, pid: pid, text: text,
-                                        caret: selection.location, selection: selection))
+                                        caret: selection.location, selection: selection, breaks: breaks))
         }
 
         // No readable field text, but the app may still expose the selection (many web views do).
@@ -329,6 +332,28 @@ enum ProofreadAX {
             return rect
         }
         return nil
+    }
+
+    /// Finds the list items, quotes and code blocks that a Chromium field shows on separate lines but
+    /// reports glued together in its value. Trusted only when the leaves add up to exactly that value:
+    /// otherwise their offsets mean nothing here, and the text is checked as it is.
+    static func hiddenBreaks(in element: AXUIElement, text: String) -> HiddenBreaks {
+        let leaves = textLeaves(of: element, depth: 6, budget: 200)
+        guard leaves.count > 1, leaves.map(\.text).joined() == text else { return .none }
+        let breaks = HiddenBreaks.find(pieces: leaves.map(\.text)) { index in
+            let previous = leaves[index - 1]
+            let lastIndex = (previous.text as NSString).length - 1
+            guard let end = rawBounds(NSRange(location: lastIndex, length: 1), in: previous.element),
+                  let start = rawBounds(NSRange(location: 0, length: 1), in: leaves[index].element) else {
+                return false
+            }
+            // Quartz coordinates: a lower line has a larger y. The slack absorbs mixed font sizes.
+            return start.minY >= end.maxY - 2
+        }
+        if !breaks.isEmpty {
+            log.debug("hidden breaks at \(breaks.offsets, privacy: .public) across \(leaves.count, privacy: .public) leaves")
+        }
+        return breaks
     }
 
     /// Leaf elements carrying text, in reading order (depth-limited: these trees can be large).

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 // Tiny assertion harness (avoids needing an XCTest bundle/host for pure-logic tests).
 var failures = 0
@@ -850,6 +851,65 @@ let pair = LanguageToolEngine.authParams(["text": "x"], username: "me@x.com", ap
 check(pair["username"] == "me@x.com" && pair["apiKey"] == "abc", "a full pair is attached")
 check(LanguageToolEngine.authParams(["text": "x"], username: "", apiKey: "")["text"] == "x",
       "original params survive")
+
+print("HiddenBreaks")
+let glued = "Купить хлеб.Позвонить маме"
+let gluedBreaks = HiddenBreaks(offsets: [12])
+eq(gluedBreaks.checkText(glued), "Купить хлеб.\nПозвонить маме", "a hidden break becomes a newline")
+eq(HiddenBreaks.none.checkText(glued), glued, "no breaks leaves the text alone")
+func ltIssue(_ text: String, _ location: Int, _ length: Int, rule: String = "R") -> TextIssue {
+    let ns = text as NSString
+    let range = NSRange(location: location, length: length)
+    return TextIssue(range: range, kind: .grammar, shortMessage: "", message: "", replacements: ["x"],
+                     ruleId: rule, source: .languageTool, original: ns.substring(with: range),
+                     contextBefore: "", contextAfter: "\n")
+}
+let checked = gluedBreaks.checkText(glued)
+let mappedBack = gluedBreaks.mapBack([ltIssue(checked, 14, 9)], to: glued)
+check(mappedBack.count == 1 && mappedBack[0].range == NSRange(location: 13, length: 9),
+      "an issue after the break moves back by one")
+eq(mappedBack.first?.original ?? "", "озвонить ", "the snapshot is retaken from the field's text")
+let lastWord = gluedBreaks.mapBack([ltIssue(checked, 7, 4)], to: glued)
+eq(lastWord.first?.contextAfter ?? "", ".Позвонить м", "context is the app's text, without our newline")
+check(gluedBreaks.mapBack([ltIssue(checked, 10, 4)], to: glued).isEmpty, "an issue spanning the break is dropped")
+check(HiddenBreaks.none.mapBack([ltIssue(glued, 0, 6)], to: glued) == [ltIssue(glued, 0, 6)],
+      "no breaks leaves issues untouched")
+let three = "оди.два.три"
+let threeBreaks = HiddenBreaks(offsets: [8, 4])
+eq(threeBreaks.checkText(three), "оди.\nдва.\nтри", "several breaks, given out of order")
+check(threeBreaks.mapBack([ltIssue(threeBreaks.checkText(three), 10, 3)], to: three).first?.range
+      == NSRange(location: 8, length: 3), "the second break shifts by two")
+let found = HiddenBreaks.find(pieces: ["Список:", "купить", " хлеб", "Позвонить"]) { $0 != 2 }
+check(found.offsets == [7, 18], "a break needs a new line and no whitespace at the seam")
+check(HiddenBreaks.find(pieces: ["жирный", "обычный"]) { _ in false }.isEmpty,
+      "inline formatting on one line is not a break")
+
+print("TranslationLayout")
+eq(TranslationLayout.restore(source: "Привет!\nКак\nдела?", translation: "Hello!\n\nHow\n\nthings?"),
+   "Hello!\nHow\nthings?", "the model's blank lines become the source's single breaks")
+eq(TranslationLayout.restore(source: "Один.\n\nДва.\nТри.", translation: "One.\n\nTwo.\n\nThree."),
+   "One.\n\nTwo.\nThree.", "each break takes the source's own run")
+eq(TranslationLayout.restore(source: "А.\nБ.\nВ.", translation: "A. B.\n\nC."),
+   "A. B.\nC.", "a merged paragraph caps runs at the source's longest")
+eq(TranslationLayout.restore(source: "Одна строка", translation: "One line\n"), "One line",
+   "a trailing newline from the model is dropped")
+eq(TranslationLayout.restore(source: "Без переносов", translation: "No breaks"), "No breaks", "no breaks, nothing to do")
+
+print("OCRParagraphs")
+func ocrLine(_ text: String, x: CGFloat = 0.1, top: CGFloat, height: CGFloat = 0.04) -> OCRParagraphs.Line {
+    OCRParagraphs.Line(text: text, box: CGRect(x: x, y: top - height, width: 0.6, height: height))
+}
+eq(OCRParagraphs.join([ocrLine("содержит только json, папки", top: 0.9),
+                       ocrLine("LanguageTool нет.", top: 0.85)]),
+   "содержит только json, папки LanguageTool нет.", "a wrapped line joins its paragraph")
+eq(OCRParagraphs.join([ocrLine("Первый абзац.", top: 0.9), ocrLine("Второй абзац.", top: 0.78)]),
+   "Первый абзац.\nВторой абзац.", "a wide gap starts a new paragraph")
+eq(OCRParagraphs.join([ocrLine("Заголовок", top: 0.9), ocrLine("Отступ", x: 0.3, top: 0.85)]),
+   "Заголовок\nОтступ", "a jump in the left edge starts a new paragraph")
+eq(OCRParagraphs.join([ocrLine("автодопол-", top: 0.9), ocrLine("нения тесты", top: 0.85)]),
+   "автодополнения тесты", "a hyphenated wrap is rejoined")
+eq(OCRParagraphs.join([ocrLine("Москва -", top: 0.9), ocrLine("Питер", top: 0.85)]),
+   "Москва - Питер", "a dash before a capital is kept")
 
 print("")
 if failures == 0 {

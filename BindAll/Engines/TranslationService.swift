@@ -92,7 +92,8 @@ final class TranslationCoordinator: ObservableObject {
         for item in items {
             do {
                 let response = try await session.translate(item.text)
-                item.continuation.resume(returning: response.targetText)
+                item.continuation.resume(returning: TranslationLayout.restore(source: item.text,
+                                                                             translation: response.targetText))
             } catch {
                 item.continuation.resume(throwing: error)
             }
