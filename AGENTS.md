@@ -70,7 +70,11 @@ BindAll/
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
 │   └── MaskAISlop.swift        # typography normalizer (dashes/quotes/emoji)
 ├── UI/
-│   ├── SettingsView.swift      # TabView (Tab API): General, Actions, Translation, Autocomplete, Proofread, Providers -- each feature owns its tab, including its on/off switch
+│   ├── SettingsView.swift      # tab bar + selected tab: General, Actions, Translation, Autocomplete, Proofread, Providers -- each feature owns its tab, including its on/off switch
+│   ├── SettingsTab / SettingsTabBar / SettingsTabRow / SettingsTabButton / SettingsTabContent .swift
+│   │                           # in-window tab bar, NOT TabView: on macOS 26+ a Tab-built TabView moves
+│   │                           # the tabs into the title bar as overflowing icons. ViewThatFits picks the
+│   │                           # widest layout that fits: icon+title, icon over title, icons only
 │   ├── GeneralSettingsView / ActionsSettingsView / TranslationSettingsView (+ TranslationSection,
 │   │   TranslationStatusRow, LanguagePicker) / ShortcutsSection .swift  # one type per file
 │   ├── HelpHint / HelpHeader / HelpToggleRow .swift # help icon, header with help, and the Form toggle

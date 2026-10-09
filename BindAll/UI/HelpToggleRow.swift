@@ -17,7 +17,11 @@ struct HelpToggleRow: View {
 
     var body: some View {
         LabeledContent {
-            Toggle(title, isOn: $isOn).labelsHidden()
+            // A switch, like the plain toggles in the same form: inside LabeledContent a Toggle
+            // would otherwise fall back to a checkbox.
+            Toggle(title, isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
         } label: {
             HelpHeader(title, help)
         }

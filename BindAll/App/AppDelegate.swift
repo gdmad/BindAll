@@ -248,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // Sized before the content is attached: a window built around the hosting controller lays
             // the TabView out at zero width first, which AppKit reports as "Invalid view geometry:
             // width is negative" once per tab.
-            let size = NSSize(width: 560, height: 558)
+            let size = SettingsView.defaultSize
             let hosting = NSHostingController(rootView: SettingsView().environment(appState))
             hosting.view.frame = NSRect(origin: .zero, size: size)
             let window = EscClosableWindow(contentRect: NSRect(origin: .zero, size: size),
