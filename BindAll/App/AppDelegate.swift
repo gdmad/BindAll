@@ -245,13 +245,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @objc func showSettings() {
         if settingsWindow == nil {
+            // Sized before the content is attached: a window built around the hosting controller lays
+            // the TabView out at zero width first, which AppKit reports as "Invalid view geometry:
+            // width is negative" once per tab.
+            let size = NSSize(width: 560, height: 558)
             let hosting = NSHostingController(rootView: SettingsView().environment(appState))
-            let window = EscClosableWindow(contentViewController: hosting)
+            hosting.view.frame = NSRect(origin: .zero, size: size)
+            let window = EscClosableWindow(contentRect: NSRect(origin: .zero, size: size),
+                                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                           backing: .buffered, defer: false)
+            window.contentViewController = hosting
             window.title = "BindAll Settings"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.isReleasedWhenClosed = false
             window.delegate = self
-            window.setContentSize(NSSize(width: 560, height: 558))
             // Remember where the user put it, instead of yanking it back to the center every time.
             if !window.setFrameUsingName(Self.settingsFrameName) { window.center() }
             window.setFrameAutosaveName(Self.settingsFrameName)
