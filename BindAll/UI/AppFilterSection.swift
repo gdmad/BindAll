@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 import UniformTypeIdentifiers
 
 /// The "which apps does this feature run in" section, shared by Autocomplete and Proofread.
@@ -27,12 +26,12 @@ struct AppFilterSection: View {
                     HStack {
                         Text(Self.appName(bundleID))
                         Spacer()
-                        Button {
-                            apps.removeAll { $0 == bundleID }
-                        } label: {
-                            Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                        Button("Remove \(Self.appName(bundleID))", systemImage: "minus.circle.fill") {
+                            remove(bundleID)
                         }
+                        .labelStyle(.iconOnly)
                         .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                     }
                 }
                 Menu("Add app…") {
@@ -41,13 +40,13 @@ struct AppFilterSection: View {
                             Button(app.name) { add(app.id) }
                         }
                     }
-                    Button("Choose from disk…") { addFromDisk() }
+                    Button("Choose from disk…", action: addFromDisk)
                 }
                 .controlSize(.small)
                 .fixedSize()
             }
         } header: {
-            helpHeader(title, help)
+            HelpHeader(title, help)
         }
     }
 
@@ -56,9 +55,13 @@ struct AppFilterSection: View {
         apps.append(bundleID)
     }
 
+    private func remove(_ bundleID: String) {
+        apps.removeAll { $0 == bundleID }
+    }
+
     private func addFromDisk() {
         let panel = NSOpenPanel()
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.directoryURL = URL(filePath: "/Applications")
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -84,6 +87,6 @@ struct AppFilterSection: View {
             seen.insert(id)
             apps.append((id: id, name: app.localizedName ?? id))
         }
-        return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 }

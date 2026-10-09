@@ -25,14 +25,15 @@ struct HistoryPanelView: View {
             Divider()
 
             if entries.isEmpty {
-                Text("No history yet")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 120)
+                ContentUnavailableView("No History Yet", systemImage: "clock",
+                                       description: Text("Results of actions and translations appear here."))
+                    .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(entries) { entry in
-                            row(entry)
+                            HistoryRow(entry: entry, isExpanded: expandedID == entry.id,
+                                       toggle: { toggle(entry.id) }, onCopy: onCopy)
                             Divider()
                         }
                     }
@@ -42,65 +43,7 @@ struct HistoryPanelView: View {
         .frame(width: 340, height: 380)
     }
 
-    @ViewBuilder
-    private func row(_ entry: HistoryEntry) -> some View {
-        let isExpanded = expandedID == entry.id
-
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                expandedID = isExpanded ? nil : entry.id
-            } label: {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 3)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(preview(entry.output))
-                            .lineLimit(1)
-                            .font(.body)
-                        Text("\(entry.kind.label) · \(entry.engine)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                detail(title: "Request", text: entry.input)
-                detail(title: "Result", text: entry.output)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-    }
-
-    @ViewBuilder
-    private func detail(title: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    onCopy(text)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc").labelStyle(.titleAndIcon)
-                }
-                .controlSize(.small)
-            }
-            Text(text)
-                .font(.callout)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
-        }
-    }
-
-    private func preview(_ text: String) -> String {
-        text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+    private func toggle(_ id: HistoryEntry.ID) {
+        expandedID = expandedID == id ? nil : id
     }
 }

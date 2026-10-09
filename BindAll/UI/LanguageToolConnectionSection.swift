@@ -31,7 +31,7 @@ struct LanguageToolConnectionSection: View {
             .onChange(of: modeDraft) { _, mode in
                 // A stale test verdict is misleading once the mode changed.
                 resetTest()
-                DispatchQueue.main.async { appState.settings.languageToolMode = mode }
+                Task { @MainActor in appState.settings.languageToolMode = mode }
                 // Pre-fill the URL for the chosen mode; the field stays editable. The draft's own
                 // onChange forwards it into settings on the next runloop tick.
                 guard let url = mode.defaultURL else { return }
@@ -39,22 +39,22 @@ struct LanguageToolConnectionSection: View {
             }
 
             LabeledContent("Server URL") {
-                TextField("", text: $urlDraft,
+                TextField("Server URL", text: $urlDraft,
                           prompt: Text("https://api.languagetool.org/v2"))
                     .labelsHidden().textFieldStyle(.plain).darkField()
                     .onChange(of: urlDraft) { _, url in
                         // Deferred: onChange fires inside the view update.
-                        DispatchQueue.main.async { appState.settings.languageToolBaseURL = url }
+                        Task { @MainActor in appState.settings.languageToolBaseURL = url }
                     }
             }
             // Credentials belong to Premium only: the public server rejects them, and a self-hosted
             // server is reached by URL.
             if modeDraft == .premium {
                 LabeledContent("Username / email") {
-                    TextField("", text: $usernameDraft)
+                    TextField("Username / email", text: $usernameDraft)
                         .labelsHidden().textFieldStyle(.plain).darkField()
                         .onChange(of: usernameDraft) { _, name in
-                            DispatchQueue.main.async { appState.settings.languageToolUsername = name }
+                            Task { @MainActor in appState.settings.languageToolUsername = name }
                         }
                 }
                 LabeledContent("API token") {
@@ -62,7 +62,7 @@ struct LanguageToolConnectionSection: View {
                     // onDisappear fires when the window is simply closed, and a token typed and left
                     // behind used to be discarded silently. The engine is rebuilt once, on submit or
                     // when the tab goes away, rather than on every keystroke.
-                    SecureField("", text: $tokenDraft)
+                    SecureField("API token", text: $tokenDraft)
                         .labelsHidden().textFieldStyle(.plain).darkField()
                         .onChange(of: tokenDraft) { _, _ in storeToken() }
                         .onSubmit { commitToken() }
@@ -70,18 +70,19 @@ struct LanguageToolConnectionSection: View {
             }
 
             HStack {
-                Button(testing ? "Testing…" : "Test connection") { test() }
+                Button(testing ? "Testing…" : "Test connection", action: test)
                     .disabled(testing)
                 if let ok {
                     Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .foregroundStyle(ok ? .green : .red)
+                        .accessibilityLabel(ok ? "Connected" : "Failed")
                 }
             }
             if !status.isEmpty {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
-            helpHeader("LanguageTool server", "How BindAll reaches LanguageTool.\n\nFree public: api.languagetool.org, no account, rate-limited, and your text is sent to languagetool.org. Credentials are never sent (the public server rejects them).\n\nPremium: api.languagetoolplus.com (a different host) with the username and token from your LanguageTool Premium account.\n\nSelf-hosted: your own server URL, no credentials.\n\nThe URL is pre-filled per mode but stays editable.")
+            HelpHeader("LanguageTool server", "How BindAll reaches LanguageTool.\n\nFree public: api.languagetool.org, no account, rate-limited, and your text is sent to languagetool.org. Credentials are never sent (the public server rejects them).\n\nPremium: api.languagetoolplus.com (a different host) with the username and token from your LanguageTool Premium account.\n\nSelf-hosted: your own server URL, no credentials.\n\nThe URL is pre-filled per mode but stays editable.")
         }
         .onAppear { load() }
         .onDisappear {

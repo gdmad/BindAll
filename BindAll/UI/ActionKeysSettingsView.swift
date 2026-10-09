@@ -2,99 +2,34 @@ import SwiftUI
 
 struct ActionKeysSettingsView: View {
     @EnvironmentObject var appState: AppState
-    /// Rows that are currently expanded. Newly added keys are inserted here so they open expanded.
-    @State private var expanded: Set<ActionKey.ID> = []
+    /// A key added in this session opens expanded, ready to be filled in.
+    @State private var newKeyID: ActionKey.ID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Iterate over values (diffed by id) and bind by id — never by index — so deleting a row
             // can't leave a stale index binding (which crashes with "Index out of range").
             ForEach(appState.settings.actionKeys) { key in
-                DisclosureGroup(isExpanded: expandedBinding(for: key.id)) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Text("Key").foregroundStyle(.secondary)
-                            TextField("", text: deferredWrite(binding(for: key.id).key), prompt: Text("key"))
-                                .labelsHidden()
-                                .textFieldStyle(.plain)
-                                .multilineTextAlignment(.leading)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(width: 140)
-                                .darkField()
-                            Spacer()
-                            Text("Shortcut").foregroundStyle(.secondary)
-                            ShortcutRecorder(optionalConfig: binding(for: key.id).hotkey,
-                                             others: otherShortcuts(excluding: key.id))
-                        }
-
-                        HStack(spacing: 8) {
-                            Text("Name").foregroundStyle(.secondary)
-                            TextField("", text: deferredWrite(binding(for: key.id).label),
-                                      prompt: Text("What this key does"))
-                                .labelsHidden()
-                                .textFieldStyle(.plain)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .darkField()
-                        }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Instruction").foregroundStyle(.secondary)
-                            TextField("", text: deferredWrite(binding(for: key.id).prompt),
-                                      prompt: Text("Describe the action for the AI…"), axis: .vertical)
-                                .labelsHidden()
-                                .textFieldStyle(.plain)
-                                .multilineTextAlignment(.leading)
-                                .lineLimit(3...8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .darkField()
-                        }
-
-                        HStack {
-                            Spacer()
-                            Button(role: .destructive) {
-                                appState.settings.actionKeys.removeAll { $0.id == key.id }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                            .controlSize(.small)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(key.key.isEmpty ? "—" : key.key)
-                            .font(.system(.body, design: .monospaced)).bold()
-                        // The name if there is one -- the built-in keys ship with good ones -- and
-                        // the instruction itself otherwise.
-                        Text(key.label.isEmpty ? key.prompt : key.label)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 0)
-                    }
-                    // Make the whole header row toggle the row, not just the chevron.
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if expanded.contains(key.id) {
-                            expanded.remove(key.id)
-                        } else {
-                            expanded.insert(key.id)
-                        }
-                    }
-                }
+                ActionKeyRow(key: binding(for: key.id),
+                             others: otherShortcuts(excluding: key.id),
+                             startsExpanded: key.id == newKeyID,
+                             delete: { delete(key.id) })
             }
 
-            Button {
-                let new = ActionKey(key: "", label: "", prompt: "")
-                appState.settings.actionKeys.append(new)
-                expanded.insert(new.id)
-            } label: {
-                Label("Add action key", systemImage: "plus")
-            }
-            .controlSize(.small)
-            .padding(.top, 4)
+            Button("Add action key", systemImage: "plus", action: addKey)
+                .controlSize(.small)
+                .padding(.top, 4)
         }
+    }
+
+    private func addKey() {
+        let new = ActionKey(key: "", label: "", prompt: "")
+        newKeyID = new.id
+        appState.settings.actionKeys.append(new)
+    }
+
+    private func delete(_ id: ActionKey.ID) {
+        appState.settings.actionKeys.removeAll { $0.id == id }
     }
 
     /// All shortcuts an action-key recorder must not collide with: the four built-ins plus the
@@ -106,17 +41,9 @@ struct ActionKeysSettingsView: View {
         return builtIn + keys
     }
 
-    private func expandedBinding(for id: ActionKey.ID) -> Binding<Bool> {
-        Binding(
-            get: { expanded.contains(id) },
-            set: { isOpen in
-                if isOpen { expanded.insert(id) } else { expanded.remove(id) }
-            }
-        )
-    }
-
     /// A binding that resolves the action key by id on every access, so it stays valid even as the
-    /// array is mutated (added/removed) elsewhere.
+    /// array is mutated (added/removed) elsewhere. `ForEach($array)` binds by index instead, which is
+    /// exactly the stale binding that crashed on delete -- the one place a hand-made binding is right.
     private func binding(for id: ActionKey.ID) -> Binding<ActionKey> {
         Binding(
             get: {

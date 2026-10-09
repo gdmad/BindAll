@@ -3,23 +3,19 @@ import SwiftUI
 struct ProvidersSettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedKind: ProviderKind = .deepseek
-    @State private var apiKeyDraft: String = ""
-    @State private var testStatus: String = ""
+    @State private var apiKeyDraft = ""
+    // Edited as drafts and written back deferred (see `deferredWrite`): text fields commit inside
+    // the view update when the tab switches.
+    @State private var baseURLDraft = ""
+    @State private var modelDraft = ""
+    @State private var testStatus = ""
     @State private var testOK: Bool?
     @State private var isTesting = false
     @State private var models: [String] = []
-
     @State private var testTask: Task<Void, Never>?
 
     private var cloudKinds: [ProviderKind] {
         ProviderKind.allCases.filter { $0 != .apple }
-    }
-
-    private var configBinding: Binding<ProviderConfig> {
-        Binding(
-            get: { appState.settings.provider(selectedKind) },
-            set: { appState.updateProvider($0) }
-        )
     }
 
     var body: some View {
@@ -33,7 +29,7 @@ struct ProvidersSettingsView: View {
                     }
                 }
             } header: {
-                helpHeader("Engine", "Used for the default action and custom prompts. Translation always runs on-device via Apple's Translation framework, and proofreading always uses LanguageTool.")
+                HelpHeader("Engine", "Used for the default action and custom prompts. Translation always runs on-device via Apple's Translation framework, and proofreading always uses LanguageTool.")
             }
 
             Section {
@@ -47,7 +43,7 @@ struct ProvidersSettingsView: View {
                 // to reload -- saving here would write the old provider's key under the new one.
                 .onChange(of: selectedKind) { _, _ in loadForSelection() }
             } header: {
-                helpHeader("Provider", "Credentials and model for each cloud provider. Configuring one does not select it -- that is the Engine picker above.")
+                HelpHeader("Provider", "Credentials and model for each cloud provider. Configuring one does not select it -- that is the Engine picker above.")
             }
 
             Section("Connection") {
@@ -56,7 +52,7 @@ struct ProvidersSettingsView: View {
                         // Saved as it is typed. Every other control here saves itself, and neither
                         // onSubmit nor onDisappear fires when the window is simply closed -- a key
                         // typed and left behind used to be discarded silently.
-                        SecureField("", text: $apiKeyDraft)
+                        SecureField("API key", text: $apiKeyDraft)
                             .labelsHidden()
                             .textFieldStyle(.plain)
                             .darkField()
@@ -64,27 +60,23 @@ struct ProvidersSettingsView: View {
                     }
                 }
                 LabeledContent("Base URL") {
-                    TextField("", text: deferredWrite(Binding(
-                        get: { configBinding.wrappedValue.baseURLOverride ?? "" },
-                        set: { var c = configBinding.wrappedValue; c.baseURLOverride = $0.isEmpty ? nil : $0; configBinding.wrappedValue = c }
-                    )), prompt: Text(selectedKind.defaultBaseURL ?? ""))
-                    .labelsHidden()
-                    .textFieldStyle(.plain)
-                    .darkField()
+                    TextField("Base URL", text: $baseURLDraft, prompt: Text(selectedKind.defaultBaseURL ?? ""))
+                        .labelsHidden()
+                        .textFieldStyle(.plain)
+                        .darkField()
+                        .onChange(of: baseURLDraft) { _, url in storeBaseURL(url) }
                 }
 
                 LabeledContent("Model") {
                     HStack {
-                        TextField("", text: deferredWrite(Binding(
-                            get: { configBinding.wrappedValue.model },
-                            set: { var c = configBinding.wrappedValue; c.model = $0; configBinding.wrappedValue = c }
-                        )))
-                        .labelsHidden()
-                        .textFieldStyle(.plain)
-                        .darkField()
-                        Button("Fetch") { fetchModels() }
+                        TextField("Model", text: $modelDraft)
+                            .labelsHidden()
+                            .textFieldStyle(.plain)
+                            .darkField()
+                        Button("Fetch", action: fetchModels)
                     }
                 }
+                .onChange(of: modelDraft) { _, model in storeModel(model) }
                 if selectedKind == .openrouter {
                     Toggle("Free models only", isOn: $appState.settings.openRouterFreeOnly)
                         .onChange(of: appState.settings.openRouterFreeOnly) { _, _ in
@@ -92,10 +84,7 @@ struct ProvidersSettingsView: View {
                         }
                 }
                 if !models.isEmpty {
-                    Picker("Available", selection: Binding(
-                        get: { configBinding.wrappedValue.model },
-                        set: { var c = configBinding.wrappedValue; c.model = $0; configBinding.wrappedValue = c }
-                    )) {
+                    Picker("Available", selection: $modelDraft) {
                         ForEach(models, id: \.self) { Text($0).tag($0) }
                     }
                 }
@@ -103,22 +92,22 @@ struct ProvidersSettingsView: View {
 
             Section {
                 HStack {
-                    Button(isTesting ? "Testing…" : "Test connection") { testConnection() }
+                    Button(isTesting ? "Testing…" : "Test connection", action: testConnection)
                         .disabled(isTesting)
                     if let testOK {
                         Image(systemName: testOK ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .foregroundStyle(testOK ? .green : .red)
+                            .accessibilityLabel(testOK ? "Connected" : "Failed")
                     }
                 }
                 if !testStatus.isEmpty {
                     Text(testStatus).font(.caption).foregroundStyle(.secondary)
                 }
             }
-
         }
         .formStyle(.grouped)
         .clearFocusOnAppear()
-        .onAppear { loadForSelection() }
+        .onAppear(perform: loadForSelection)
         .onDisappear {
             saveKey(for: selectedKind)
             // A verdict must not survive a tab switch, and an in-flight test must not surface later.
@@ -139,8 +128,32 @@ struct ProvidersSettingsView: View {
         appState.setAPIKey(trimmed, for: kind)
     }
 
+    private func storeBaseURL(_ url: String) {
+        let kind = selectedKind
+        Task { @MainActor in
+            var config = appState.settings.provider(kind)
+            let override = url.isEmpty ? nil : url
+            guard config.baseURLOverride != override else { return }
+            config.baseURLOverride = override
+            appState.updateProvider(config)
+        }
+    }
+
+    private func storeModel(_ model: String) {
+        let kind = selectedKind
+        Task { @MainActor in
+            var config = appState.settings.provider(kind)
+            guard config.model != model else { return }
+            config.model = model
+            appState.updateProvider(config)
+        }
+    }
+
     private func loadForSelection() {
+        let config = appState.settings.provider(selectedKind)
         apiKeyDraft = appState.apiKey(for: selectedKind)
+        baseURLDraft = config.baseURLOverride ?? ""
+        modelDraft = config.model
         models = []
         testStatus = ""
         testOK = nil

@@ -69,12 +69,21 @@ BindAll/
 │   ├── ActionRouter.swift      # EngineFactory (builds an AIEngine from settings)
 │   └── MaskAISlop.swift        # typography normalizer (dashes/quotes/emoji)
 ├── UI/
-│   ├── SettingsView.swift      # tabs: General, Actions, Translation, Autocomplete, Proofread, Providers (each feature owns its tab, including its on/off switch); `toggleRow(title, help, isOn:)` is the shared pattern for a Form toggle with a help hint -- keeps the hint's `Button` out of the Toggle's own label
+│   ├── SettingsView.swift      # TabView (Tab API): General, Actions, Translation, Autocomplete, Proofread, Providers -- each feature owns its tab, including its on/off switch
+│   ├── GeneralSettingsView / ActionsSettingsView / TranslationSettingsView (+ TranslationSection,
+│   │   TranslationStatusRow, LanguagePicker) / ShortcutsSection .swift  # one type per file
+│   ├── HelpHint / HelpHeader / HelpToggleRow .swift # help icon, header with help, and the Form toggle
+│   │                           # with a help hint (keeps the hint's Button out of the Toggle's label)
 │   ├── AutocompleteSettingsView.swift  # autocomplete tab (on/off, count, layout, language, learning, per-app)
+│   ├── LearnedWordsView / TypoFilterRow / LearnedWordRow .swift # learned-words sheet
+│   ├── LanguageSelectionBinding.swift  # Binding<[String]>.contains(code) / .isAuto for menu toggles
 │   ├── ProofreadSettingsView.swift     # proofread tab (on/off, fixes, layout, language, per-app)
 │   ├── AppFilterSection.swift          # shared per-app allow/deny section (autocomplete + proofread)
-│   ├── ActionKeysSettingsView.swift
-│   ├── ProvidersSettingsView.swift     # engine picker + AI providers (keys, models)
+│   ├── ActionKeysSettingsView.swift / ActionKeyRow.swift # action keys; rows bound by id, never by index
+│   ├── ProvidersSettingsView.swift     # engine picker + AI providers (keys, models; drafts written back deferred)
+│   ├── ShortcutRecorder.swift / HotkeyFormatter.swift # click-to-record shortcut field, glyph formatting
+│   ├── DarkFieldStyle / ClearFocusOnAppear / DeferredWrite .swift # input box style, no auto-focus on
+│   │                           # tab appear, deferred settings writes from text fields
 │   ├── LanguageToolConnectionSection.swift # LT mode/URL/credentials block on the Proofread tab
 │   ├── PopupKit.swift          # shared popup metrics/panel/placement/tile measuring (AppKit geometry, not views)
 │   ├── PopupPresenter.swift    # owns a popup's non-activating panel; generic present(view), no AnyView
@@ -87,7 +96,7 @@ BindAll/
 │   ├── FixesPopupHeader.swift  # kind marker, rule wording, "N of M" counter (one accessibility element)
 │   ├── PopupMessageView.swift  # one-line notice in the same chrome
 │   ├── FirstMouseHostingView.swift # NSHostingView that accepts the first click on a never-key panel
-│   ├── HistoryPanelView.swift  # History list shown as a popover from the menu bar (click = copy)
+│   ├── HistoryPanelView.swift / HistoryRow.swift / HistoryDetail.swift # History popover from the menu bar
 │   ├── PopupController.swift   # floating NSPanel for translation/results; closes on Esc/Close only
 │   ├── PopupModel.swift / PopupView.swift / PopupHeader.swift / PopupOriginalSection.swift
 │   │                           # result popup: header is the only drag area, copy-original icon

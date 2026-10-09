@@ -1,34 +1,4 @@
 import SwiftUI
-import AppKit
-
-/// Formats a HotkeyConfig as glyphs, e.g. ⌘C, ⇧⌘E, or ⌘C+C for a double press.
-enum HotkeyFormatter {
-    static func string(_ c: HotkeyConfig) -> String {
-        string(keyCode: c.keyCode, mods: c.modifiers, count: c.repeatCount)
-    }
-
-    static func string(keyCode: UInt16, mods: HotkeyModifiers, count: Int) -> String {
-        var s = ""
-        if mods.control { s += "⌃" }
-        if mods.option { s += "⌥" }
-        if mods.shift { s += "⇧" }
-        if mods.command { s += "⌘" }
-        let key = keyName(keyCode).uppercased()
-        s += key
-        if count > 1 { s += String(repeating: "+\(key)", count: count - 1) }
-        return s
-    }
-
-    static func keyName(_ code: UInt16) -> String { keyNames[code] ?? "Key\(code)" }
-
-    static let keyNames: [UInt16: String] = [
-        0: "A", 11: "B", 8: "C", 2: "D", 14: "E", 3: "F", 5: "G", 4: "H", 34: "I", 38: "J",
-        40: "K", 37: "L", 46: "M", 45: "N", 31: "O", 35: "P", 12: "Q", 15: "R", 1: "S", 17: "T",
-        32: "U", 9: "V", 13: "W", 7: "X", 16: "Y", 6: "Z",
-        18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9", 29: "0",
-        49: "Space", 36: "Return", 48: "Tab",
-    ]
-}
 
 /// A click-to-record shortcut field. Captures a modifier+key chord; pressing the same chord again
 /// within a short window increases the press count (shown as ⌘C, ⌘C+C, ...). Rejects duplicates.
@@ -40,7 +10,8 @@ struct ShortcutRecorder: View {
     /// When true (optional mode), a clear button removes the shortcut entirely.
     var allowsClear: Bool = false
 
-    /// Required shortcut (the four built-ins): bridges a non-optional binding.
+    /// Required shortcut (the four built-ins): bridges a non-optional binding. The recorder works on
+    /// an optional (action keys can have none), and a non-optional value has to be adapted to it.
     init(config: Binding<HotkeyConfig>, others: [HotkeyConfig]) {
         self._config = Binding(get: { config.wrappedValue }, set: { if let v = $0 { config.wrappedValue = v } })
         self.others = others
@@ -59,7 +30,7 @@ struct ShortcutRecorder: View {
     @State private var pendingMods = HotkeyModifiers(command: false)
     @State private var pendingCount = 0
     @State private var monitor: Any?
-    @State private var finalizeWork: DispatchWorkItem?
+    @State private var finalizeTask: Task<Void, Never>?
     @State private var conflict = false
     @Environment(\.colorScheme) private var colorScheme
 
@@ -67,13 +38,12 @@ struct ShortcutRecorder: View {
         HStack(spacing: 6) {
             Button(action: toggleRecording) {
                 Text(displayText)
-                    .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(minWidth: 90)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .contentShape(Rectangle())
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.fieldFill(for: colorScheme)))
@@ -83,28 +53,24 @@ struct ShortcutRecorder: View {
             )
 
             if isRecording {
-                Button(action: cancelRecording) {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+                Button("Cancel recording", systemImage: "xmark.circle.fill", action: cancelRecording)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
             } else if allowsClear, config != nil {
-                Button {
-                    config = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Remove shortcut")
+                Button("Remove shortcut", systemImage: "xmark.circle.fill", action: clearShortcut)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Remove shortcut")
             }
         }
         .help(conflict ? "This shortcut is already used by another action." : "")
         .onDisappear { stopRecording(apply: false) }
     }
 
-    private var borderColor: Color {
-        if conflict { return .red }
-        if isRecording { return .accentColor }
-        return Color(nsColor: .separatorColor)
+    private var borderColor: AnyShapeStyle {
+        if conflict { AnyShapeStyle(.red) } else if isRecording { AnyShapeStyle(.tint) } else { AnyShapeStyle(.separator) }
     }
 
     private var displayText: String {
@@ -119,6 +85,10 @@ struct ShortcutRecorder: View {
     }
 
     // MARK: - Recording
+
+    private func clearShortcut() {
+        config = nil
+    }
 
     private func toggleRecording() {
         isRecording ? cancelRecording() : startRecording()
@@ -159,11 +129,14 @@ struct ShortcutRecorder: View {
         scheduleFinalize()
     }
 
+    /// Waits a moment for the same chord again (⌘C+C) before taking what was pressed.
     private func scheduleFinalize() {
-        finalizeWork?.cancel()
-        let work = DispatchWorkItem { finalize() }
-        finalizeWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
+        finalizeTask?.cancel()
+        finalizeTask = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            finalize()
+        }
     }
 
     private func finalize() {
@@ -175,7 +148,10 @@ struct ShortcutRecorder: View {
         if isDuplicate {
             conflict = true
             stopRecording(apply: false)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { conflict = false }
+            Task {
+                try? await Task.sleep(for: .seconds(1.6))
+                conflict = false
+            }
             return
         }
         config = new
@@ -187,8 +163,8 @@ struct ShortcutRecorder: View {
     }
 
     private func stopRecording(apply: Bool) {
-        finalizeWork?.cancel()
-        finalizeWork = nil
+        finalizeTask?.cancel()
+        finalizeTask = nil
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
         isRecording = false
         pendingKeyCode = nil
@@ -197,7 +173,7 @@ struct ShortcutRecorder: View {
         // unconditional @Published assignment there logs "Publishing changes from within view
         // updates" for every recorder being torn down.
         if appState.isRecordingShortcut {
-            DispatchQueue.main.async { appState.isRecordingShortcut = false }
+            Task { @MainActor in appState.isRecordingShortcut = false }
         }
     }
 }
