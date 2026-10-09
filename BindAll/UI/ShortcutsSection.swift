@@ -2,9 +2,10 @@ import SwiftUI
 
 /// Global shortcut recorders, hosted as a section inside the Actions tab's Form.
 struct ShortcutsSection: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     var body: some View {
+        @Bindable var appState = appState
         let s = appState.settings
         let keyShortcuts = s.actionKeys.compactMap(\.hotkey)
         Section {

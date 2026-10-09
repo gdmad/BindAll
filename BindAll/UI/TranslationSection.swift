@@ -2,12 +2,13 @@ import SwiftUI
 
 /// Translation options: the language pair and whether it works offline.
 struct TranslationSection: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     /// Offline status of the currently selected pair: nil = unknown (Auto source).
     @State private var pairInstalled: Bool?
 
     var body: some View {
+        @Bindable var appState = appState
         Section {
             HStack(spacing: 8) {
                 Text("Source").foregroundStyle(.secondary)

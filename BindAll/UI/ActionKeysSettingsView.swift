@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ActionKeysSettingsView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
     /// A key added in this session opens expanded, ready to be filled in.
     @State private var newKeyID: ActionKey.ID?
 

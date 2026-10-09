@@ -2,11 +2,12 @@ import SwiftUI
 
 /// Everything about word autocomplete, starting with its on/off switch.
 struct AutocompleteSettingsView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
     @State private var learnedCount = 0
     @State private var showLearned = false
 
     var body: some View {
+        @Bindable var appState = appState
         Form {
             Section {
                 HelpToggleRow("Word autocomplete", "Suggests completions for the word you are typing and can predict the next word; press Tab to insert. Works in most apps; skipped in password fields.",

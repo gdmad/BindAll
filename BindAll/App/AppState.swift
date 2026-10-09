@@ -1,28 +1,28 @@
 import Foundation
-import Combine
+import Observation
 
 /// Root observable model. Owns settings persistence and exposes Keychain-backed API keys.
-@MainActor
-final class AppState: ObservableObject {
-    private static let settingsKey = "BindAll.settings.v1"
+@MainActor @Observable
+final class AppState {
+    @ObservationIgnored private static let settingsKey = "BindAll.settings.v1"
 
-    @Published var settings: Settings {
+    var settings: Settings {
         didSet { persist() }
     }
 
     /// Live Accessibility permission status (updated by the coordinator).
-    @Published var accessibilityGranted: Bool = false
+    var accessibilityGranted: Bool = false
     /// Whether the global hotkey tap is actually installed and enabled right now (updated by the
     /// coordinator) -- distinct from `accessibilityGranted`: the permission can show as granted in
     /// System Settings while the tap itself is stale or was never (re)installed. Surfacing this
     /// separately in Status is what makes that state visible instead of silently doing nothing.
-    @Published var hotkeysActive: Bool = false
+    var hotkeysActive: Bool = false
     /// Human-readable Apple Intelligence availability status.
-    @Published var appleEngineStatus: String = "Unknown"
+    var appleEngineStatus: String = "Unknown"
     /// True while an action/translation is running (drives the menu-bar icon).
-    @Published var isProcessing: Bool = false
+    var isProcessing: Bool = false
     /// True while the user is recording a shortcut in Settings (pauses global hotkeys).
-    @Published var isRecordingShortcut: Bool = false
+    var isRecordingShortcut: Bool = false
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.settingsKey),
@@ -40,13 +40,19 @@ final class AppState: ObservableObject {
 
     // MARK: - API keys (Keychain)
 
+    /// Bumped whenever a key or token in the Keychain changes. The Keychain is out of observation's
+    /// sight, so this is what views showing a key, and the coordinator that rebuilds engines from
+    /// them, observe instead.
+    private(set) var keychainRevision = 0
+
     func apiKey(for kind: ProviderKind) -> String {
-        KeychainStore.get(account: kind.keychainAccount) ?? ""
+        _ = keychainRevision
+        return KeychainStore.get(account: kind.keychainAccount) ?? ""
     }
 
     func setAPIKey(_ value: String, for kind: ProviderKind) {
         KeychainStore.set(value, account: kind.keychainAccount)
-        objectWillChange.send()
+        keychainRevision += 1
     }
 
     // MARK: - LanguageTool token (Keychain)
@@ -54,16 +60,17 @@ final class AppState: ObservableObject {
     private static let languageToolAccount = "languagetool.apikey"
 
     func languageToolToken() -> String {
-        KeychainStore.get(account: Self.languageToolAccount) ?? ""
+        _ = keychainRevision
+        return KeychainStore.get(account: Self.languageToolAccount) ?? ""
     }
 
-    /// Stores the token. `reconfigure` re-emits `settings` so observers (the hotkey coordinator,
-    /// which rebuilds the LanguageTool engine) pick the new token up -- the token lives in the
-    /// Keychain, not in `settings`, so they would not otherwise learn it changed. Pass `false` while
-    /// the user is still typing it, and once more with `true` when the field is done.
+    /// Stores the token. `reconfigure` bumps `keychainRevision` so the hotkey coordinator rebuilds
+    /// the LanguageTool engine with it. Pass `false` while the user is still typing it, and once
+    /// more with `true` when the field is done. (Re-assigning `settings` to itself used to do this;
+    /// an observable property does not notify when assigned an equal value.)
     func setLanguageToolToken(_ value: String, reconfigure: Bool = true) {
         KeychainStore.set(value, account: Self.languageToolAccount)
-        if reconfigure { settings = settings }
+        if reconfigure { keychainRevision += 1 }
     }
 
     // MARK: - Provider config helpers

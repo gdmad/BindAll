@@ -19,7 +19,8 @@ BindAll/
 ├── App/
 │   ├── BindAllApp.swift        # @main; placeholder SwiftUI Settings scene — UI is AppKit-driven
 │   ├── AppDelegate.swift       # NSStatusItem menu (actions + shortcuts), settings window, icon, login
-│   └── AppState.swift          # ObservableObject: settings persistence, Keychain keys, isProcessing
+│   └── AppState.swift          # @Observable: settings persistence, Keychain keys (keychainRevision), isProcessing;
+│                               # views read it via @Environment(AppState.self), AppKit code via Observations { }
 ├── Hotkeys/
 │   ├── HotkeyMonitor.swift     # CGEventTap; detects N presses of key+modifiers within a time window
 │   ├── HotkeyCoordinator.swift # Orchestrates hotkey → selection → engine / translation / OCR

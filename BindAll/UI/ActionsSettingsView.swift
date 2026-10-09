@@ -1,9 +1,10 @@
 import SwiftUI
 
 struct ActionsSettingsView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     var body: some View {
+        @Bindable var appState = appState
         Form {
             ShortcutsSection()
 

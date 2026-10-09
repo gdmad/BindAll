@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import Combine
+import Observation
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         popover.behavior = .transient
         return popover
     }()
-    private var cancellables = Set<AnyCancellable>()
+    private var stateObservers: [Task<Void, Never>] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -30,27 +30,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // only if not yet granted. No window is opened automatically.
         AccessibilityPermission.requestIfNeeded()
 
-        // Swap the menu-bar icon while an action is being processed.
-        appState.$isProcessing
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] busy in self?.updateStatusIcon(busy: busy) }
-            .store(in: &cancellables)
-
-        // The icon also carries the master switch: dimmed while off. The main-thread hop matters --
-        // @Published fires in willSet, so the new value is only readable after it.
-        appState.$settings
-            .map(\.enabled)
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
+        // The menu-bar icon shows both "processing" (swapped while an action runs) and the master
+        // switch (dimmed while off), so it is redrawn whenever either changes.
+        let appState = self.appState
+        stateObservers.append(Task { [weak self] in
+            var last: (busy: Bool, enabled: Bool)?
+            for await state in Observations({ (busy: appState.isProcessing, enabled: appState.settings.enabled) }) {
                 guard let self else { return }
-                self.updateStatusIcon(busy: self.appState.isProcessing)
+                if let last, last == state { continue }
+                last = state
+                self.updateStatusIcon(busy: state.busy)
             }
-            .store(in: &cancellables)
+        })
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        stateObservers.forEach { $0.cancel() }
         coordinator.stop()
         AutocompleteLearningStore.shared.flush() // save any words learned in the debounce window
     }
@@ -250,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @objc func showSettings() {
         if settingsWindow == nil {
-            let hosting = NSHostingController(rootView: SettingsView().environmentObject(appState))
+            let hosting = NSHostingController(rootView: SettingsView().environment(appState))
             let window = EscClosableWindow(contentViewController: hosting)
             window.title = "BindAll Settings"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

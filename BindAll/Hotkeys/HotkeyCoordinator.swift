@@ -1,11 +1,11 @@
 import AppKit
 import SwiftUI
-import Combine
+import Observation
 import os
 
 /// Wires global hotkeys to the selection → engine/translation pipeline.
 @MainActor
-final class HotkeyCoordinator: ObservableObject {
+final class HotkeyCoordinator {
     private static let log = Logger(subsystem: "com.evgeny.bindall", category: "hotkeys")
 
     private let appState: AppState
@@ -17,7 +17,7 @@ final class HotkeyCoordinator: ObservableObject {
     private lazy var quickTranslate = QuickTranslateController(appState: appState)
 
     private var translationWindow: NSWindow?
-    private var cancellables = Set<AnyCancellable>()
+    private var settingsObserver: Task<Void, Never>?
     private var retryTimer: Timer?
     private var busyWatchdog: DispatchWorkItem?
     private var isBusy = false
@@ -46,15 +46,21 @@ final class HotkeyCoordinator: ObservableObject {
         updateAutocomplete()
         updateProofread()
 
-        appState.$settings
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.reconfigureWatched()
-                self?.refreshStatus()
-                self?.updateAutocomplete()
-                self?.updateProofread()
+        // Every settings change -- or a key/token change in the Keychain -- re-applies everything; each
+        // step is cheap and idempotent. The first value is the current one, already applied just
+        // above, so it is skipped.
+        let appState = self.appState
+        settingsObserver = Task { [weak self] in
+            var isFirst = true
+            for await _ in Observations({ (appState.settings, appState.keychainRevision) }) {
+                if isFirst { isFirst = false; continue }
+                guard let self else { return }
+                self.reconfigureWatched()
+                self.refreshStatus()
+                self.updateAutocomplete()
+                self.updateProofread()
             }
-            .store(in: &cancellables)
+        }
 
         // The event tap can only be installed once Accessibility is granted. Poll so the user does
         // not have to relaunch after granting permission, and keep the status indicators live.
@@ -124,6 +130,8 @@ final class HotkeyCoordinator: ObservableObject {
     }
 
     func stop() {
+        settingsObserver?.cancel()
+        settingsObserver = nil
         retryTimer?.invalidate()
         retryTimer = nil
         monitor.stop()

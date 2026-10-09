@@ -3,7 +3,7 @@ import SwiftUI
 /// A click-to-record shortcut field. Captures a modifier+key chord; pressing the same chord again
 /// within a short window increases the press count (shown as ⌘C, ⌘C+C, ...). Rejects duplicates.
 struct ShortcutRecorder: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
     @Binding var config: HotkeyConfig?
     /// The other shortcuts to check against for duplicates.
     let others: [HotkeyConfig]
@@ -170,7 +170,7 @@ struct ShortcutRecorder: View {
         pendingKeyCode = nil
         pendingCount = 0
         // Guarded and deferred: onDisappear runs inside the tab-switch view update, and an
-        // unconditional @Published assignment there logs "Publishing changes from within view
+        // unconditional state assignment there used to log "Publishing changes from within view
         // updates" for every recorder being torn down.
         if appState.isRecordingShortcut {
             Task { @MainActor in appState.isRecordingShortcut = false }

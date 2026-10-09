@@ -1,10 +1,11 @@
 import SwiftUI
 
 struct GeneralSettingsView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
     @State private var launchAtLogin = LoginItemManager.isEnabled
 
     var body: some View {
+        @Bindable var appState = appState
         Form {
             Section {
                 HelpToggleRow("BindAll enabled", "The master switch, the same one the menu bar carries. Off: the global shortcuts, autocomplete and proofreading all stand down until it is back on.",

@@ -4,7 +4,7 @@ import SwiftUI
 /// Proofread tab: LanguageTool serves only that feature, so its connection lives with it, the way
 /// every other feature keeps its options on its own tab.
 struct LanguageToolConnectionSection: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     // URL, username and token are edited via drafts: a TextField bound straight to the published
     // settings commits its text while SwiftUI switches tabs, publishing from within a view update.

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ProvidersSettingsView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
     @State private var selectedKind: ProviderKind = .deepseek
     @State private var apiKeyDraft = ""
     // Edited as drafts and written back deferred (see `deferredWrite`): text fields commit inside
@@ -19,6 +19,7 @@ struct ProvidersSettingsView: View {
     }
 
     var body: some View {
+        @Bindable var appState = appState
         Form {
             // The engine that actually runs, and below it the credentials for each provider: the
             // two used to live on different tabs, which read as if they were unrelated.

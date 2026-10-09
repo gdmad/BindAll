@@ -4,9 +4,10 @@ import SwiftUI
 /// connection (LanguageTool serves only this feature). There is no shortcut: checking runs on its
 /// own after a pause in typing.
 struct ProofreadSettingsView: View {
-    @EnvironmentObject var appState: AppState
+    @Environment(AppState.self) private var appState
 
     var body: some View {
+        @Bindable var appState = appState
         Form {
             Section {
                 HelpToggleRow("Enable Proofread", "Checks the text field you are typing in with a LanguageTool server shortly after you pause, and underlines every issue in place. Click an underlined word to see the fixes. The public server sends text to languagetool.org; use a self-hosted server for full privacy.",
