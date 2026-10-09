@@ -9,7 +9,7 @@ struct QuickTranslateFooter: View {
             Text("Enter: translate")
             Text("⇧Enter: new line")
             Text("⌘/: swap")
-            Text("⌃C: copy")
+            Text("⌘C: copy")
             Spacer()
             if isTranslating { ProgressView().controlSize(.small) }
         }

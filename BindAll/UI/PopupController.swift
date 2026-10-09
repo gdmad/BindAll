@@ -8,6 +8,7 @@ import SwiftUI
 @MainActor
 final class PopupController {
     private var panel: NSPanel?
+    private let copyShortcut = CopyShortcutMonitor()
 
     func show(title: String, text: String, original: String? = nil, sourceLanguage: String? = nil,
               targetLanguage: String? = nil, at screenPoint: NSPoint? = nil) {
@@ -30,6 +31,7 @@ final class PopupController {
         panel.isReleasedWhenClosed = false
         panel.setContentSize(NSSize(width: 380, height: 260))
         self.panel = panel
+        copyShortcut.install(on: panel, copyAll: model.copyText)
 
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -37,6 +39,7 @@ final class PopupController {
     }
 
     func close() {
+        copyShortcut.remove()
         panel?.orderOut(nil)
         panel = nil
     }

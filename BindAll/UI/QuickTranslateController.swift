@@ -7,6 +7,7 @@ import Translation
 final class QuickTranslateController: NSObject, NSWindowDelegate {
     private let appState: AppState
     private var window: NSWindow?
+    private let copyShortcut = CopyShortcutMonitor()
 
     init(appState: AppState) {
         self.appState = appState
@@ -24,15 +25,16 @@ final class QuickTranslateController: NSObject, NSWindowDelegate {
             return
         }
 
-        let view = QuickTranslateView(
-            initialSource: appState.settings.sourceLanguage,
-            initialTarget: appState.settings.targetLanguage,
+        let model = QuickTranslateModel(
+            source: appState.settings.sourceLanguage,
+            target: appState.settings.targetLanguage,
             onClose: { [weak self] in self?.close() },
             onTranslated: { [weak self] input, output in
                 guard let self, self.appState.settings.historyEnabled else { return }
                 HistoryStore.shared.record(kind: .quick, input: input, output: output, engine: "Apple Translation")
             }
         )
+        let view = QuickTranslateView(model: model)
         let hosting = NSHostingController(rootView: view)
         // A regular window (not a floating panel) so the system language-download sheet attaches and
         // stays put; floating panels make that sheet flash and fail.
@@ -47,6 +49,7 @@ final class QuickTranslateController: NSObject, NSWindowDelegate {
         window.setContentSize(NSSize(width: 460, height: 430))
         window.center()
         self.window = window
+        copyShortcut.install(on: window, copyAll: model.copyOutput)
 
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -54,6 +57,7 @@ final class QuickTranslateController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        copyShortcut.remove()
         window?.orderOut(nil)
         window = nil
         NSApp.setActivationPolicy(.accessory)
@@ -61,6 +65,7 @@ final class QuickTranslateController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window else { return }
+        copyShortcut.remove()
         window = nil
         NSApp.setActivationPolicy(.accessory)
     }

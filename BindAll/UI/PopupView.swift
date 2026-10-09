@@ -26,15 +26,8 @@ struct PopupView: View {
                         .toggleStyle(.checkbox)
                 }
                 Spacer()
-                Button(action: model.onClose) {
-                    Text("Close").frame(minWidth: 56)
-                }
-                .controlSize(.large)
-                Button(action: model.copyText) {
-                    Text(model.copiedText ? "Copied" : "Copy").frame(minWidth: 56)
-                }
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
+                CloseButton(action: model.onClose)
+                CopyButton(copied: model.copiedText, action: model.copyText)
             }
         }
         .padding([.top, .horizontal], 14)

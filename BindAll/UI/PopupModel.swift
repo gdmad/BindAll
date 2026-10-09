@@ -9,6 +9,7 @@ final class PopupModel {
     let sourceLanguage: String?
     let targetLanguage: String?
     @ObservationIgnored let onClose: () -> Void
+    @ObservationIgnored private var copiedReset: Task<Void, Never>?
     var showOriginal = false
     private(set) var copiedText = false
     private(set) var copiedOriginal = false
@@ -32,6 +33,12 @@ final class PopupModel {
     func copyText() {
         TextInjector.copyToPasteboard(text)
         copiedText = true
+        copiedReset?.cancel()
+        copiedReset = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            copiedText = false
+        }
     }
 
     func copyOriginal() {

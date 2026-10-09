@@ -93,8 +93,14 @@ BindAll/
 │   │                           # result popup: header is the only drag area, copy-original icon
 │   ├── WindowDragHandle.swift  # NSView that drags its window (body stays text-selectable)
 │   ├── KeyablePanel.swift      # NSPanel that can become key from an accessory app
-│   └── QuickTranslate*.swift   # Quick Translate window: controller, view, language bar, input,
-│                               # output (Copy / Ctrl+C copies the whole translation), footer
+│   ├── QuickTranslate*.swift   # Quick Translate window: controller, @Observable model, view, language
+│   │                           # bar, input (vertical TextField: system placeholder level with the
+│   │                           # caret; Return translates, Shift+Return inserts a newline), output,
+│   │                           # action bar (Clear / Close / Copy), footer
+│   ├── CopyButton.swift / CloseButton.swift # the shared translation-window buttons (Copy is the
+│   │                           # prominent one, "Copied" for 1.5 s)
+│   └── CopyShortcutMonitor.swift # Cmd+C in a translation window: the selection if there is one,
+│                               # otherwise the whole translation
 └── Store/
     ├── Settings.swift          # Codable settings, ProviderKind, HotkeyConfig
     ├── ActionKey.swift         # {key, label, prompt, hotkey?}; built-in w / u / l / о / гг

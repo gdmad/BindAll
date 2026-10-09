@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Translation
 import NaturalLanguage
+import Observation
 
 /// Helpers around language-pack availability for on-device translation.
 enum TranslationSupport {
@@ -57,17 +58,17 @@ enum LanguageDetector {
 ///
 /// A hidden `TranslationHostView` owns the `.translationTask`; this coordinator drives it by
 /// publishing a configuration and resuming a continuation once the session produces a result.
-@MainActor
-final class TranslationCoordinator: ObservableObject {
-    @Published var configuration: TranslationSession.Configuration?
+@MainActor @Observable
+final class TranslationCoordinator {
+    var configuration: TranslationSession.Configuration?
 
     private struct Pending {
         let text: String
         let continuation: CheckedContinuation<String, Error>
     }
-    private var pending: [Pending] = []
-    private var currentSource: Locale.Language?
-    private var currentTarget: Locale.Language?
+    @ObservationIgnored private var pending: [Pending] = []
+    @ObservationIgnored private var currentSource: Locale.Language?
+    @ObservationIgnored private var currentTarget: Locale.Language?
 
     func translate(_ text: String, from source: Locale.Language?, to target: Locale.Language) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
@@ -103,7 +104,7 @@ final class TranslationCoordinator: ObservableObject {
 
 /// Invisible view that hosts the Translation session. Kept alive in an offscreen window.
 struct TranslationHostView: View {
-    @ObservedObject var coordinator: TranslationCoordinator
+    let coordinator: TranslationCoordinator
 
     var body: some View {
         Color.clear
