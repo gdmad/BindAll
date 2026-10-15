@@ -14,6 +14,8 @@ struct ProofTarget {
     let selection: NSRange
     /// Block boundaries the app shows but leaves out of `text` (see `HiddenBreaks`).
     var breaks: HiddenBreaks = .none
+    /// How `text` offsets translate into the app's own, when the two differ (see `AppOffsetMap`).
+    var offsetMap: AppOffsetMap?
 }
 
 enum ProofSource {
@@ -44,9 +46,6 @@ enum ProofreadAX {
             guard !isSecure(candidate),
                   let text = currentText(of: candidate), !text.isEmpty else { continue }
 
-            var selection = NSRange(location: (text as NSString).length, length: 0)
-            if let range = selectedRange(of: candidate) { selection = range }
-
             var pid: pid_t = 0
             AXUIElementGetPid(candidate, &pid)
             // A web area's own pid is often a renderer/helper process, distinct from the frontmost
@@ -56,9 +55,23 @@ enum ProofreadAX {
                pid != frontPid, chromiumPids.contains(frontPid) {
                 chromiumPids.insert(pid)
             }
-            let breaks = isChromium(pid: pid) ? hiddenBreaks(in: candidate, text: text) : .none
+            let chromium = isChromium(pid: pid)
+            let breaks = chromium ? hiddenBreaks(in: candidate, text: text) : .none
+            let map = chromium ? offsetMap(for: candidate, text: text) : nil
+            // The selection is reported in the app's offsets; everything downstream works in the
+            // value's, so it is translated back before anyone measures a word with it.
+            var selection = NSRange(location: (text as NSString).length, length: 0)
+            if let range = selectedRange(of: candidate) {
+                if let map {
+                    let start = map.valueOffset(range.location)
+                    selection = NSRange(location: start, length: map.valueOffset(NSMaxRange(range)) - start)
+                } else {
+                    selection = range
+                }
+            }
             return .axField(ProofTarget(element: candidate, pid: pid, text: text,
-                                        caret: selection.location, selection: selection, breaks: breaks))
+                                        caret: selection.location, selection: selection, breaks: breaks,
+                                        offsetMap: map))
         }
 
         // No readable field text, but the app may still expose the selection (many web views do).
@@ -214,12 +227,46 @@ enum ProofreadAX {
         return result as? String
     }
 
+    /// The app's own text, read through `AXStringForRange` in chunks (Slack refuses one range over the
+    /// whole field), lined up against `text`. Nil when the two are the same or cannot be lined up.
+    /// Cached for the last text: underlines, clicks and fixes all ask about the same one.
+    static func offsetMap(for element: AXUIElement, text: String) -> AppOffsetMap? {
+        if let cached = mapCache, cached.text == text, CFEqual(cached.element, element) { return cached.map }
+        var app = ""
+        var location = 0
+        var chunk = 256
+        let limit = (text as NSString).length + 1
+        while location < limit {
+            guard let piece = string(for: NSRange(location: location, length: chunk), in: element) else {
+                if chunk > 1 { chunk /= 2; continue }
+                break
+            }
+            let length = (piece as NSString).length
+            guard length > 0 else { break }
+            app += piece
+            location += length
+            if length < chunk { break }
+        }
+        let map = AppOffsetMap(value: text, app: app).flatMap { $0.isIdentity ? nil : $0 }
+        if map == nil, app != text {
+            log.debug("offset map: app text (\((app as NSString).length, privacy: .public)) does not line up with the value (\((text as NSString).length, privacy: .public))")
+        }
+        mapCache = (element, text, map)
+        return map
+    }
+
+    private static var mapCache: (element: AXUIElement, text: String, map: AppOffsetMap?)?
+
     /// Confirms `range` really holds `original` according to the app, shifting by up to `window`
     /// UTF-16 units to find it when the app's offsets differ from ours. Returns nil when the app
     /// answers but nothing nearby matches, and `range` unchanged when it cannot answer at all.
+    /// With `map`, the exact translation is tried first; the search below is for apps without one.
     static func alignedRange(_ range: NSRange, expecting original: String, in element: AXUIElement,
                              contextBefore: String = "", contextAfter: String = "",
-                             window: Int? = nil) -> NSRange? {
+                             window: Int? = nil, map: AppOffsetMap? = nil) -> NSRange? {
+        if let map, let mapped = map.appRange(range), string(for: mapped, in: element) == original {
+            return mapped
+        }
         guard let here = string(for: range, in: element) else { return range } // app cannot tell us
         if here == original, contextMatches(range, contextBefore, contextAfter, in: element) {
             return range
@@ -356,16 +403,20 @@ enum ProofreadAX {
 
     /// The safety net for a break `hiddenBreaks` could not see: whether `issue` sits across a line
     /// break the field leaves out of its text, judged by where the characters are on screen.
-    static func crossesVisualBreak(_ issue: TextIssue, text: String, in element: AXUIElement) -> Bool {
+    static func crossesVisualBreak(_ issue: TextIssue, text: String, in element: AXUIElement,
+                                   map: AppOffsetMap? = nil) -> Bool {
         let seams = HiddenBreaks.seamCandidates(of: issue, in: text)
         guard !seams.isEmpty else { return false }
-        // The app's offsets can drift from the value's (see `alignedRange`); measure in its own.
-        let shift = alignedRange(issue.range, expecting: issue.original, in: element,
-                                 contextBefore: issue.contextBefore,
-                                 contextAfter: issue.contextAfter).map { $0.location - issue.range.location } ?? 0
+        let ns = text as NSString
+        // Measured in the app's own offsets, and through the text leaves when the field itself has
+        // no geometry (Slack answers the field-wide query with an empty rect).
+        func bounds(_ offset: Int) -> CGRect? {
+            let ours = NSRange(location: offset, length: 1)
+            guard let range = map?.appRange(ours) ?? Optional(ours), range.length > 0 else { return nil }
+            return boundsForRange(range, in: element, expecting: ns.substring(with: ours))
+        }
         return seams.contains { seam in
-            guard let left = rawBounds(NSRange(location: seam - 1 + shift, length: 1), in: element),
-                  let right = rawBounds(NSRange(location: seam + shift, length: 1), in: element) else { return false }
+            guard let left = bounds(seam - 1), let right = bounds(seam) else { return false }
             return isLower(right, than: left)
         }
     }

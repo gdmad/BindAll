@@ -12,6 +12,8 @@ struct PopupCell: View {
     var systemImage: String?
     /// Secondary text for such an action, so it never reads as one of the fixes.
     var isSecondary = false
+    /// False for an icon-only action; `text` then remains its name for VoiceOver.
+    var showsTitle = true
     /// What a click on the cell does. Nil for a cell that is not clickable (the autocomplete list is
     /// purely keyboard-driven), which is also what keeps it from being announced as a button.
     var onActivate: (() -> Void)?
@@ -24,7 +26,7 @@ struct PopupCell: View {
                 Image(systemName: systemImage).accessibilityHidden(true)
             }
         }
-        .labelStyle(PopupCellLabelStyle(showsIcon: systemImage != nil))
+        .labelStyle(PopupCellLabelStyle(showsIcon: systemImage != nil, showsTitle: showsTitle))
         .font(.system(size: fontSize))
         .foregroundStyle(foreground)
         .padding(.horizontal, PopupMetrics.cellPaddingH)
@@ -60,11 +62,12 @@ struct PopupCell: View {
 /// Title only for words; icon and title for actions.
 private struct PopupCellLabelStyle: LabelStyle {
     let showsIcon: Bool
+    let showsTitle: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: PopupMetrics.inlineSpacing) {
             if showsIcon { configuration.icon }
-            configuration.title
+            if showsTitle { configuration.title }
         }
     }
 }

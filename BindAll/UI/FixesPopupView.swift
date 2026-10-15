@@ -18,7 +18,8 @@ struct FixesPopupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: PopupMetrics.cellSpacing) {
-            FixesPopupHeader(title: title, kind: kind, position: position, fontSize: fontSize)
+            FixesPopupHeader(title: title, kind: kind, position: position, fontSize: fontSize,
+                             skipSelected: selected == skipIndex, onHoverSkip: hoverSkip, onSkip: skip)
             if replacements.isEmpty {
                 // Real information, not a hint: secondary rather than tertiary, which is hard to read
                 // on the material.
@@ -31,9 +32,6 @@ struct FixesPopupView: View {
                                  fontSize: fontSize, tileTopCount: tileTopCount,
                                  onHover: onHover, onActivate: onAccept)
             }
-            Divider()
-            FixesPopupSkipRow(isSelected: selected == skipIndex, fontSize: fontSize,
-                              onHover: hoverSkip, onActivate: skip)
         }
         .frame(minWidth: PopupMetrics.minWidth, maxWidth: PopupMetrics.maxWidth, alignment: .leading)
         .popupChrome()

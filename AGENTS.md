@@ -55,6 +55,8 @@ BindAll/
 │   ├── ProofreadCache.swift           # paragraph segmentation + per-paragraph issue cache
 │   ├── HiddenBreaks.swift             # pure: block breaks Chromium leaves out of AXValue (align leaves, check text, map back, seam candidates)
 │   ├── ProofreadSkips.swift           # pure: places the user skipped (rule + text + context keys)
+│   ├── ListMarkers.swift              # pure: list numbers/bullets glued to their item ("1.Buy")
+│   ├── AppOffsetMap.swift             # pure: value offsets <-> the app's own (Slack drops some newlines)
 │   ├── ProofreadLanguage.swift        # language resolution; ru/uk disambiguation for "auto"
 │   ├── LanguageToolProofreadProvider.swift # actor: paragraph-scoped checks + cache
 │   ├── ProofreadAX.swift              # focused field text/selection, word bounds, in-place select
@@ -98,8 +100,8 @@ BindAll/
 │   ├── PopupItemsLayout.swift  # the one column/line/tile layout both popups use
 │   ├── PopupTilePacker.swift   # pure: how many cells fit the tile's first row
 │   ├── ProofreadPopover.swift  # the fixes popup: presenter + placement above the word
-│   ├── FixesPopupView.swift    # the fixes popup's content: header + PopupItemsLayout + FixesPopupSkipRow
-│   ├── FixesPopupHeader.swift  # kind marker, rule wording, "N of M" counter (one accessibility element)
+│   ├── FixesPopupView.swift    # the fixes popup's content: header + PopupItemsLayout
+│   ├── FixesPopupHeader / FixesPopupSummary / FixesPopupSkipButton .swift # kind + wording + counter, then the Skip icon
 │   ├── PopupMessageView.swift  # one-line notice in the same chrome
 │   ├── FirstMouseHostingView.swift # NSHostingView that accepts the first click on a never-key panel
 │   ├── HistoryPanelView.swift / HistoryRow.swift / HistoryDetail.swift # History popover from the menu bar
@@ -237,22 +239,28 @@ count for that key is reached (only counts with a larger sibling wait out the ti
   wire for Premium only; `LanguageToolEngine.authParams` is a final guard that never sends a
   lone username or apiKey. The Premium token lives in the Keychain. The URL is pre-filled per mode
   but stays editable; there is no settings migration (mode defaults to Free).
-- **Slack block boundaries:** Slack (Chromium) reports list items, quotes and code blocks glued
-  together in `AXValue` ("Buy bread.Call mom"), which made LanguageTool flag every list item's first
-  word with `SENTENCE_WHITESPACE`. `ProofreadAX.hiddenBreaks` (Chromium only) walks the field's text
-  leaves and matches them against `AXValue` with a cursor (`HiddenBreaks.align`): a leaf that is not
-  in the value -- a bulleted list's "•" / "1." markers, extra link text -- is skipped instead of
-  spoiling the rest. Two matched leaves that sit back to back with no whitespace, the second starting
-  on a lower line (per `AXBoundsForRange`), are a hidden break. The check runs on
-  `HiddenBreaks.checkText` (newlines put back), and `mapBack` returns issues in `AXValue`
-  coordinates, dropping any that span a break and retaking original/context from the field's text.
-  Safety net for a break the leaves miss: `ProofreadAX.crossesVisualBreak` drops an issue whose
-  `HiddenBreaks.seamCandidates` (its start when the fix inserts a space; lowercase/closing
-  punctuation running into a capital or digit inside it) straddle two screen lines.
-- **Skip:** the fixes popup ends with a "Skip" row (below a divider, secondary, `eye.slash`), reached
-  with the arrows like a fix (index = `replacements.count`) or clicked. It hides that one place for
-  the rest of the session via `ProofreadSkips`, keyed by rule + text + 6 characters of context each
-  side, so it survives re-checks and edits elsewhere while the same word in another place still shows.
+- **Slack text, measured on a live composer:** Slack's `AXValue` has a newline after every list item,
+  soft line break (Shift+Enter) and emoji, and a numbered or bulleted item's marker glued to its text
+  ("1.Buy", "\u{E506}Buy" -- U+E506 is Slack's bullet glyph). Its own string -- what
+  `AXStringForRange`, `AXBoundsForRange` and the selection are indexed by -- is the same text with
+  those newlines left out (paragraph, quote and code-block newlines stay; it refuses one range over
+  the whole field, so it is read in chunks). Two fixes follow:
+  - `ListMarkers.markerEnds` finds glued markers at line starts; the check text gets a space there
+    (`HiddenBreaks.spaces`), so LanguageTool no longer reads "1.Buy" as a missing space after a full
+    stop. `mapBack` removes the inserted characters again.
+  - `AppOffsetMap` lines the value up with the app's string character by character (the app's must
+    be the value minus some newlines) and translates ranges exactly: `ProofreadAX.offsetMap(for:text:)`
+    (Chromium only, cached for the last text) feeds `alignedRange(..., map:)` in the overlay, the
+    applier and the click path, and `focus()` translates the app's selection back into value offsets.
+  - An issue the overlay still cannot place in the field is dropped from the list
+    (`UnderlineOverlay.show` returns its id), so "N of M" equals what is underlined.
+  - `ProofreadAX.hiddenBreaks` (leaves matched to the value with a cursor, markers skipped) and the
+    `crossesVisualBreak` safety net remain for apps that do glue blocks together without a newline.
+- **Skip:** an icon (`eye.slash`) beside the "N of M" counter in the fixes popup header
+  (`FixesPopupSkipButton`, its own VoiceOver element), reached with the arrows as the last choice
+  (index = `replacements.count`) or clicked. It hides that one place for the rest of the session via
+  `ProofreadSkips`, keyed by rule + text + 6 characters of context each side, so it survives
+  re-checks and edits elsewhere while the same word in another place still shows.
 - **Translation layout:** Apple's model (macOS 27) translates each line as its own segment and
   joins the output with blank lines. The whole text still goes in one request (context matters);
   `TranslationLayout.restore` then swaps the output's newline runs for the source's. OCR lines are

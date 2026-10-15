@@ -17,12 +17,18 @@ final class UnderlineOverlay {
     private var refreshWork: DispatchWorkItem?
     /// What is currently drawn, so scroll and window moves can be followed by re-measuring.
     private var shownIssues: [TextIssue] = []
+    private var shownMap: AppOffsetMap?
     private var shownElement: AXUIElement?
     private var shownFieldFrame: CGRect = .zero
 
-    func show(issues: [TextIssue], element: AXUIElement) {
+    /// Draws what it can and returns the ids of the issues it could not place in the field: those
+    /// would not apply either, so the caller drops them rather than count what nobody can see.
+    @discardableResult
+    func show(issues: [TextIssue], element: AXUIElement, map: AppOffsetMap? = nil) -> Set<String> {
         shownIssues = issues
         shownElement = element
+        shownMap = map
+        var unplaced = Set<String>()
         let primaryHeight = Self.primaryScreenHeight()
 
         // Word rects first: without them there is nothing to draw anyway, and their union stands in
@@ -34,8 +40,11 @@ final class UnderlineOverlay {
             // an underline in the wrong place is worse than no underline.
             guard let range = ProofreadAX.alignedRange(issue.range, expecting: issue.original, in: element,
                                                        contextBefore: issue.contextBefore,
-                                                       contextAfter: issue.contextAfter),
-                  let quartz = ProofreadAX.boundsForRange(range, in: element,
+                                                       contextAfter: issue.contextAfter, map: map) else {
+                unplaced.insert(issue.id)
+                continue
+            }
+            guard let quartz = ProofreadAX.boundsForRange(range, in: element,
                                                           expecting: issue.original) else { continue }
             // The one-character probe tells a wrapped range from a single-line one. When the app
             // does not answer it, fall back to a plausible single-line height.
@@ -49,7 +58,7 @@ final class UnderlineOverlay {
                                                                    primaryScreenHeight: primaryHeight),
                               color: Self.color(for: issue.kind)))
         }
-        guard !wordRects.isEmpty else { hide(); return }
+        guard !wordRects.isEmpty else { hide(); return unplaced }
 
         let fieldQuartz = ProofreadAX.frame(of: element)
         let field: CGRect
@@ -79,6 +88,7 @@ final class UnderlineOverlay {
         panel.setFrame(panelFrame, display: true)
         panel.orderFront(nil) // NOT makeKey: the text field must keep focus.
         installHideTriggers()
+        return unplaced
     }
 
     func hide() {
@@ -93,7 +103,7 @@ final class UnderlineOverlay {
     /// calls per issue, and only while the overlay is visible.
     private func refresh() {
         guard let element = shownElement, !shownIssues.isEmpty else { return }
-        show(issues: shownIssues, element: element)
+        show(issues: shownIssues, element: element, map: shownMap)
     }
 
     // MARK: - Panel

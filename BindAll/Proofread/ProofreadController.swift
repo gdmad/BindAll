@@ -169,9 +169,11 @@ final class ProofreadController {
             probe = word
             // The caret comes from the app's selection, which in Chromium is indexed differently
             // from the value we measured the word in. Translate it back into our offsets, so the
-            // popup belongs to the word actually clicked.
+            // popup belongs to the word actually clicked. With an offset map `focus()` has already
+            // done that exactly.
             let clicked = (found.text as NSString).substring(with: word)
-            if let appRange = ProofreadAX.alignedRange(word, expecting: clicked, in: found.element),
+            if found.offsetMap == nil,
+               let appRange = ProofreadAX.alignedRange(word, expecting: clicked, in: found.element),
                appRange != word,
                let ourRange = WordBoundary.wordRange(at: word.location - (appRange.location - word.location),
                                                      in: found.text) {
@@ -231,8 +233,11 @@ final class ProofreadController {
         let gen = generation
         checkTask?.cancel()
         pendingSelectionCheck = selection != nil
-        let breaks = target?.breaks ?? .none
+        // Glued list markers ("1.Buy") get a space for the check in any app; it only matters where an
+        // app reports them that way.
+        let breaks = (target?.breaks ?? .none).addingSpaces(ListMarkers.markerEnds(in: text))
         let chromiumElement = target.flatMap { ProofreadAX.isChromium(pid: $0.pid) ? $0.element : nil }
+        let offsetMap = target?.offsetMap
 
         checkTask = Task { [weak self] in
             guard let self else { return }
@@ -241,7 +246,7 @@ final class ProofreadController {
                 var found = breaks.mapBack(try await provider.check(breaks.checkText(text)), to: text)
                 guard !Task.isCancelled, gen == self.generation else { return }
                 if let element = chromiumElement {
-                    found.removeAll { ProofreadAX.crossesVisualBreak($0, text: text, in: element) }
+                    found.removeAll { ProofreadAX.crossesVisualBreak($0, text: text, in: element, map: offsetMap) }
                 }
                 let rebased = offset == 0 ? found : ProofreadCache.rebase(found, to: offset)
                 self.lastError = nil
@@ -305,7 +310,14 @@ final class ProofreadController {
             underlines.hide()
             return
         }
-        underlines.show(issues: issues, element: element)
+        let unplaced = underlines.show(issues: issues, element: element, map: target?.offsetMap)
+        // An issue that cannot be found in the field would neither underline nor apply; dropping it
+        // keeps "N of M" equal to what is on screen.
+        if !unplaced.isEmpty {
+            Self.log.debug("dropping \(unplaced.count, privacy: .public) issue(s) that could not be placed in the field")
+            issues.removeAll { unplaced.contains($0.id) }
+            if issues.isEmpty { underlines.hide() }
+        }
     }
 
     // MARK: - Session

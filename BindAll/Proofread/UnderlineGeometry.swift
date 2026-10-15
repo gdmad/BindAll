@@ -13,7 +13,7 @@ enum UnderlineGeometry {
     /// How far below a word's rect the underline hangs. The AX bounds of a word include its
     /// descenders, so a line drawn on the bottom edge cuts through them; this drops it clear of
     /// the text. AppKit coordinates (y grows upward), so it is subtracted from the rect's minY.
-    static let underlineDrop: CGFloat = 3
+    static let underlineDrop: CGFloat = 1.5
 
     /// Stroke width of the underline.
     static let underlineThickness: CGFloat = 2

@@ -8,24 +8,38 @@ import Foundation
 struct HiddenBreaks: Equatable {
     /// UTF-16 offsets into the field's text, ascending. A break sits *before* the character there.
     let offsets: [Int]
+    /// Where a space is put back instead: right after a list item's number or bullet, which Slack
+    /// glues to the item ("1.Buy bread", "\u{E506}Buy bread"). See `ListMarkers`.
+    let spaces: [Int]
 
     static let none = HiddenBreaks(offsets: [])
 
-    init(offsets: [Int]) {
+    init(offsets: [Int], spaces: [Int] = []) {
         self.offsets = Array(Set(offsets)).sorted()
+        self.spaces = Array(Set(spaces).subtracting(offsets)).sorted()
     }
 
-    var isEmpty: Bool { offsets.isEmpty }
+    var isEmpty: Bool { offsets.isEmpty && spaces.isEmpty }
 
-    /// The text LanguageTool should see: the field's text with a newline at every hidden break.
+    func addingSpaces(_ more: [Int]) -> HiddenBreaks {
+        HiddenBreaks(offsets: offsets, spaces: spaces + more)
+    }
+
+    /// Every inserted character, by its offset in the field's text, ascending.
+    private var insertions: [(offset: Int, character: String)] {
+        (offsets.map { ($0, "\n") } + spaces.map { ($0, " ") }).sorted { $0.0 < $1.0 }
+    }
+
+    /// The text LanguageTool should see: the field's text with a newline at every hidden break and
+    /// a space after every glued list marker.
     func checkText(_ text: String) -> String {
-        guard !offsets.isEmpty else { return text }
+        guard !isEmpty else { return text }
         let ns = text as NSString
         var out = ""
         var start = 0
-        for offset in offsets where offset > start && offset < ns.length {
-            out += ns.substring(with: NSRange(location: start, length: offset - start)) + "\n"
-            start = offset
+        for insertion in insertions where insertion.offset > start && insertion.offset < ns.length {
+            out += ns.substring(with: NSRange(location: start, length: insertion.offset - start)) + insertion.character
+            start = insertion.offset
         }
         return out + ns.substring(from: start)
     }
@@ -35,10 +49,10 @@ struct HiddenBreaks: Equatable {
     /// the original and its surroundings is retaken from `text`, because it is compared against
     /// what the app itself reports and must not contain the newlines that are only ours.
     func mapBack(_ issues: [TextIssue], to text: String) -> [TextIssue] {
-        guard !offsets.isEmpty else { return issues }
+        guard !isEmpty else { return issues }
         let ns = text as NSString
-        // Positions of the inserted newlines in check-text coordinates.
-        let inserted = offsets.enumerated().map { $0.element + $0.offset }
+        // Positions of the inserted characters in check-text coordinates.
+        let inserted = insertions.enumerated().map { $0.element.offset + $0.offset }
         return issues.compactMap { issue in
             let start = issue.range.location
             let end = NSMaxRange(issue.range)

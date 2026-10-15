@@ -39,9 +39,10 @@ enum IssueApplier {
         // Our offsets come from the field's value; the app's selection may be indexed differently
         // (Chromium's are), which is how a fix ends up on the neighbouring word. Ask the app what it
         // has at that range and shift until its own text agrees -- or refuse.
+        let map = ProofreadAX.isChromium(pid: pid) ? ProofreadAX.offsetMap(for: element, text: text) : nil
         guard let range = ProofreadAX.alignedRange(ourRange, expecting: issue.original, in: element,
                                                    contextBefore: issue.contextBefore,
-                                                   contextAfter: issue.contextAfter) else {
+                                                   contextAfter: issue.contextAfter, map: map) else {
             log.debug("alignedRange found nothing matching near \(ourRange)")
             return .stale
         }
@@ -80,7 +81,8 @@ enum IssueApplier {
         // would apply the fix twice, so treat it as applied.
         if let now = ProofreadAX.currentText(of: element) {
             let ns = now as NSString
-            if NSMaxRange(range) <= ns.length, ns.substring(with: range) == replacement {
+            // The value's own range, not the app's: the two differ where the app drops newlines.
+            if NSMaxRange(ourRange) <= ns.length, ns.substring(with: ourRange) == replacement {
                 log.debug("the fix is already in the field; skipping the paste")
                 return .applied(replacedRange: ourRange)
             }

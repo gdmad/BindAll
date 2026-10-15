@@ -902,6 +902,44 @@ check(aligned[0] == 0 && aligned[1] == nil && aligned[2] == 4, "a piece that is 
 check(HiddenBreaks.find(pieces: ["один", "ЛИШНЕЕ", "два"], in: "одиндва") { _, _ in true }.offsets == [4],
       "pieces either side of a skipped one still meet")
 
+print("ListMarkers (real Slack text)")
+let slackNumbered = "Итоги встречи:\n1.первый пункт про малако\n2.Второй пункт с точкой.\n3.третий пункт без точки\nПосле списка есть ощибка."
+let slackNS = slackNumbered as NSString
+check(ListMarkers.markerEnds(in: slackNumbered) == ["1.первый", "2.Второй", "3.третий"].map { slackNS.range(of: $0).location + 2 },
+      "a number glued to its item gets a space after the marker")
+let slackBulleted = "Список дел:\n\u{E506}купить хлеп\n\u{E506}Позвонить маме."
+check(ListMarkers.markerEnds(in: slackBulleted).count == 2, "Slack's private-use bullet counts as a marker")
+check(ListMarkers.markerEnds(in: "•Пункт\n12)Текст\na.Буква").count == 3, "typed bullets, 12) and a. are markers")
+check(ListMarkers.markerEnds(in: "1.5 кг муки\n-5 градусов\n1. Уже с пробелом\nвнутри 1.строки").isEmpty,
+      "decimals, negative numbers, separated markers and mid-line numbers are left alone")
+let spaced = HiddenBreaks.none.addingSpaces(ListMarkers.markerEnds(in: slackNumbered))
+eq(spaced.checkText(slackNumbered),
+   "Итоги встречи:\n1. первый пункт про малако\n2. Второй пункт с точкой.\n3. третий пункт без точки\nПосле списка есть ощибка.",
+   "the check sees '1. первый', not '1.первый'")
+let spacedCheck = spaced.checkText(slackNumbered) as NSString
+let typoInCheck = spacedCheck.range(of: "ощибка")
+let typoBack = spaced.mapBack([ltIssue(spacedCheck as String, typoInCheck.location, typoInCheck.length)], to: slackNumbered)
+check(typoBack.first?.range == slackNS.range(of: "ощибка"), "an issue after the markers maps back onto the field's text")
+
+print("AppOffsetMap (real Slack text)")
+// Slack's own string drops the newlines between list items, but keeps the one after a quote.
+let slackApp = "Итоги встречи:1.первый пункт про малако2.Второй пункт с точкой.3.третий пункт без точкиПосле списка есть ощибка."
+let offsetMap = AppOffsetMap(value: slackNumbered, app: slackApp)
+check(offsetMap != nil && offsetMap?.isIdentity == false, "the value lines up with Slack's string")
+let typoValue = slackNS.range(of: "ощибка")
+check(offsetMap?.appRange(typoValue) == (slackApp as NSString).range(of: "ощибка"),
+      "a word after four dropped newlines lands on the same word in Slack's offsets")
+check(offsetMap?.appRange(slackNS.range(of: "малако")) == (slackApp as NSString).range(of: "малако"),
+      "a word after one dropped newline lands on the same word")
+check(offsetMap?.valueOffset((slackApp as NSString).range(of: "Второй").location) == slackNS.range(of: "Второй").location,
+      "a caret in Slack's offsets comes back to the value's")
+let quoteValue = "Это цитата с ашибкой\nТекст после цитаты."
+check(AppOffsetMap(value: quoteValue, app: quoteValue)?.isIdentity == true, "identical texts need no translation")
+let emojiValue = "Отлично \n\n сделали, спосибо"
+check(AppOffsetMap(value: emojiValue, app: "Отлично  сделали, спосибо")?.appRange((emojiValue as NSString).range(of: "спосибо"))
+      == ("Отлично  сделали, спосибо" as NSString).range(of: "спосибо"), "an emoji's two newlines are dropped too")
+check(AppOffsetMap(value: "abc", app: "abd") == nil, "texts that differ in more than newlines are not lined up")
+
 print("Seam candidates")
 func seamIssue(_ text: String, _ word: String, fix: String) -> TextIssue {
     let range = (text as NSString).range(of: word)
